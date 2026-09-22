@@ -2,9 +2,9 @@ spring:
   application:
     name: rain
   datasource:
-    url: ${DATABASE_URL}
-    username: ${DATABASE_USERNAME}
-    password: ${DATABASE_PASSWORD}
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/rain_db}
+    username: ${DATABASE_USERNAME:rain_user}
+    password: ${DATABASE_PASSWORD:rain_password}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
