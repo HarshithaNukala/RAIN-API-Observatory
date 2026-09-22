@@ -2,6 +2,7 @@
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useApi, useDeleteApi, usePauseApi, useResumeApi, useManualCheckApi } from '../services/apiRegistryHooks'
 import { ArrowLeft, Play, Pause, Trash2, Settings, Activity, RefreshCw } from 'lucide-react'
+import { ApiMetrics } from '../components/ApiMetrics'
 
 export const ApiDetailsPage = () => {
   const { id } = useParams<{ id: string }>()
@@ -112,9 +113,8 @@ export const ApiDetailsPage = () => {
         </div>
 
         <div className="col-span-1 space-y-6">
-          <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center"><Activity className="w-4 h-4 mr-2" /> Metrics</h3>
-            <p className="text-sm text-slate-500 italic">No monitoring data yet.</p>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <ApiMetrics apiId={api.id!} />
           </div>
           
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-sm">

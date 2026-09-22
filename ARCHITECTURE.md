@@ -22,8 +22,15 @@ The backend is built with Java 21 and Spring Boot 3.x.
 ### Future Role: Scheduler
 *(FUTURE PHASE)* Spring Scheduling will handle background health checks to ensure APIs are monitored continuously based on user-defined intervals.
 
-### Future Role: Telemetry
-*(FUTURE PHASE)* Metrics will be collected and stored for later aggregation and dashboarding (response latency, status codes, etc.).
+### Telemetry Engine (Phase 4)
+Telemetry converts raw health checks into reliable platform metrics:
+- **Check-Based Uptime**: Defined as `(successful checks / total checks) * 100`. This is based on observed checks, not strict elapsed-time.
+- **Platform-wide Metric**: A pooled check-success percentage calculated globally across all `health_checks`.
+- **Response Latency**: Time elapsed until an HTTP response is received (`latency_ms IS NOT NULL`). Nulls (timeouts) are explicitly excluded from average and P95 math.
+- **P95 Latency**: Calculated using PostgreSQL `PERCENTILE_CONT(0.95)`.
+- **Time Bucketing**: Aggregations use native PostgreSQL `date_trunc` at `UTC`.
+- **Paused APIs**: Paused APIs do not generate new health checks, so they do not contribute to ongoing telemetry, but their historical checks remain part of metric calculations.
+- **Future Retention Strategy**: Future phases will implement data rollups (partitioning or materialized views) to manage the growing `health_checks` table.
 
 ### Future Role: Incident Engine
 *(FUTURE PHASE)* Automated incident detection will analyze telemetry data and trigger alerts/incidents when an API fails consecutively or drops below performance thresholds.
