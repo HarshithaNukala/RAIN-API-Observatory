@@ -5,6 +5,7 @@ import com.rain.dto.ApiServiceRequest;
 import com.rain.dto.ApiServiceResponse;
 import com.rain.entity.HttpMethod;
 import com.rain.exception.ResourceNotFoundException;
+import com.rain.monitoring.MonitoringEngineService;
 import com.rain.service.ApiRegistryService;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -31,6 +32,9 @@ public class ApiServiceControllerTest {
 
     @MockBean
     private ApiRegistryService apiRegistryService;
+
+    @MockBean
+    private MonitoringEngineService monitoringEngineService;
 
     @Test
     public void testCreateService_ValidationFailure() throws Exception {

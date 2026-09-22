@@ -48,6 +48,7 @@ public class ApiRegistryService {
         updateEntityFromRequest(service, request);
         service.setEnabled(true);
         service.setCurrentStatus(ApiStatus.UNKNOWN);
+        service.setNextCheckAt(java.time.Instant.now());
         ApiService saved = repository.save(service);
         return mapToResponse(saved, true);
     }
@@ -58,6 +59,13 @@ public class ApiRegistryService {
         ApiService service = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("API Service not found with id: " + id));
         updateEntityFromRequest(service, request);
+        
+        // Editing monitoring interval must recalculate next_check_at appropriately
+        // If it's enabled, we schedule it immediately to pick up the new interval config
+        if (service.getEnabled()) {
+            service.setNextCheckAt(java.time.Instant.now());
+        }
+        
         ApiService saved = repository.save(service);
         return mapToResponse(saved, true);
     }
@@ -86,6 +94,7 @@ public class ApiRegistryService {
                 .orElseThrow(() -> new ResourceNotFoundException("API Service not found with id: " + id));
         service.setEnabled(true);
         service.setCurrentStatus(ApiStatus.UNKNOWN);
+        service.setNextCheckAt(java.time.Instant.now());
         ApiService saved = repository.save(service);
         return mapToResponse(saved, true);
     }
@@ -114,6 +123,7 @@ public class ApiRegistryService {
         service.setTimeoutMs(request.getTimeoutMs());
         service.setLatencyThresholdMs(request.getLatencyThresholdMs());
         service.setCheckIntervalSeconds(request.getCheckIntervalSeconds());
+        service.setRequestBody(request.getRequestBody());
 
         // Update headers
         service.setHeaders(null); // Clears existing headers
@@ -142,6 +152,9 @@ public class ApiRegistryService {
         response.setCurrentStatus(service.getCurrentStatus());
         response.setCreatedAt(service.getCreatedAt());
         response.setUpdatedAt(service.getUpdatedAt());
+        response.setRequestBody(service.getRequestBody());
+        response.setLastCheckedAt(service.getLastCheckedAt());
+        response.setNextCheckAt(service.getNextCheckAt());
 
         if (includeHeaders && service.getHeaders() != null) {
             List<ApiHeaderResponse> headerResponses = service.getHeaders().stream()

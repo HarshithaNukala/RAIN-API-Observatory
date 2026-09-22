@@ -36,6 +36,8 @@ public class ApiServiceRequest {
     @Min(value = 1, message = "Check interval must be greater than 0")
     private Integer checkIntervalSeconds;
 
+    private String requestBody;
+
     @Valid
     private List<ApiHeaderRequest> headers;
 
@@ -65,6 +67,9 @@ public class ApiServiceRequest {
 
     public Integer getCheckIntervalSeconds() { return checkIntervalSeconds; }
     public void setCheckIntervalSeconds(Integer checkIntervalSeconds) { this.checkIntervalSeconds = checkIntervalSeconds; }
+
+    public String getRequestBody() { return requestBody; }
+    public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
 
     public List<ApiHeaderRequest> getHeaders() { return headers; }
     public void setHeaders(List<ApiHeaderRequest> headers) { this.headers = headers; }

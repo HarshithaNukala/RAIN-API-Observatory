@@ -1,7 +1,7 @@
 
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useApi, useDeleteApi, usePauseApi, useResumeApi } from '../services/apiRegistryHooks'
-import { ArrowLeft, Play, Pause, Trash2, Settings, Activity } from 'lucide-react'
+import { useApi, useDeleteApi, usePauseApi, useResumeApi, useManualCheckApi } from '../services/apiRegistryHooks'
+import { ArrowLeft, Play, Pause, Trash2, Settings, Activity, RefreshCw } from 'lucide-react'
 
 export const ApiDetailsPage = () => {
   const { id } = useParams<{ id: string }>()
@@ -11,6 +11,7 @@ export const ApiDetailsPage = () => {
   const deleteApi = useDeleteApi()
   const pauseApi = usePauseApi()
   const resumeApi = useResumeApi()
+  const manualCheck = useManualCheckApi()
 
   if (isLoading) return <div className="p-8 text-center text-slate-500">Loading API details...</div>
   if (isError || !api) return <div className="p-8 text-center text-red-500">Failed to load API details</div>
@@ -44,6 +45,16 @@ export const ApiDetailsPage = () => {
         </div>
         
         <div className="flex space-x-3">
+          {api.enabled && (
+            <button
+              onClick={() => manualCheck.mutate(api.id!)}
+              disabled={manualCheck.isPending}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${manualCheck.isPending ? 'animate-spin' : ''}`} />
+              Check Now
+            </button>
+          )}
           {api.enabled ? (
             <button onClick={() => pauseApi.mutate(api.id!)} className="flex items-center px-4 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition border border-amber-200">
               <Pause className="w-4 h-4 mr-2" /> Pause Monitoring
@@ -90,6 +101,13 @@ export const ApiDetailsPage = () => {
               </ul>
             )}
             <p className="mt-4 text-xs text-slate-400">Note: Actual secret values are never displayed.</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-800 mb-4">Request Body</h3>
+            <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+              <p className="text-sm text-slate-200 font-mono whitespace-pre-wrap">{api.requestBody || 'None'}</p>
+            </div>
           </div>
         </div>
 

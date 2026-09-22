@@ -15,7 +15,8 @@ export const AddApiPage = () => {
     timeoutMs: 5000,
     latencyThresholdMs: 1000,
     checkIntervalSeconds: 60,
-    headers: []
+    headers: [],
+    requestBody: ''
   })
   
   const [errorMsg, setErrorMsg] = useState('')
@@ -87,6 +88,12 @@ export const AddApiPage = () => {
             <label className="block text-sm font-medium text-slate-700 mb-1">Monitoring Frequency (seconds)</label>
             <input type="number" className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
               value={formData.checkIntervalSeconds} onChange={e => setFormData({...formData, checkIntervalSeconds: parseInt(e.target.value)})} />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Request Body (optional)</label>
+            <textarea className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono text-sm" rows={4}
+              placeholder='{"key": "value"}'
+              value={formData.requestBody || ''} onChange={e => setFormData({...formData, requestBody: e.target.value})}></textarea>
           </div>
           <div className="col-span-2">
             <label className="block text-sm font-medium text-slate-700 mb-1">Description (optional)</label>

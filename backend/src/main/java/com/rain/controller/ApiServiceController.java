@@ -2,6 +2,8 @@ package com.rain.controller;
 
 import com.rain.dto.ApiServiceRequest;
 import com.rain.dto.ApiServiceResponse;
+import com.rain.entity.HealthCheck;
+import com.rain.monitoring.MonitoringEngineService;
 import com.rain.service.ApiRegistryService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -15,9 +17,11 @@ import java.util.List;
 public class ApiServiceController {
 
     private final ApiRegistryService apiRegistryService;
+    private final MonitoringEngineService monitoringEngineService;
 
-    public ApiServiceController(ApiRegistryService apiRegistryService) {
+    public ApiServiceController(ApiRegistryService apiRegistryService, MonitoringEngineService monitoringEngineService) {
         this.apiRegistryService = apiRegistryService;
+        this.monitoringEngineService = monitoringEngineService;
     }
 
     @GetMapping
@@ -55,5 +59,14 @@ public class ApiServiceController {
     @PostMapping("/{id}/resume")
     public ResponseEntity<ApiServiceResponse> resumeService(@PathVariable Long id) {
         return ResponseEntity.ok(apiRegistryService.resumeService(id));
+    }
+
+    @PostMapping("/{id}/check")
+    public ResponseEntity<?> manualCheck(@PathVariable Long id) {
+        HealthCheck result = monitoringEngineService.executeAndSaveCheck(id);
+        if (result == null) {
+            return ResponseEntity.badRequest().body("API is disabled or not found.");
+        }
+        return ResponseEntity.ok(result);
     }
 }

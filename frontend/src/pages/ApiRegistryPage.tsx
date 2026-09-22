@@ -1,13 +1,14 @@
 
 import { Link } from 'react-router-dom'
-import { useApis, usePauseApi, useResumeApi, useDeleteApi } from '../services/apiRegistryHooks'
-import { Play, Pause, Trash2, Edit, Plus } from 'lucide-react'
+import { useApis, usePauseApi, useResumeApi, useDeleteApi, useManualCheckApi } from '../services/apiRegistryHooks'
+import { Play, Pause, Trash2, Edit, Plus, RefreshCw } from 'lucide-react'
 
 export const ApiRegistryPage = () => {
   const { data: apis, isLoading, isError } = useApis()
   const pauseApi = usePauseApi()
   const resumeApi = useResumeApi()
   const deleteApi = useDeleteApi()
+  const manualCheck = useManualCheckApi()
 
   if (isLoading) return <div className="p-8 text-center text-slate-500">Loading APIs...</div>
   if (isError) return <div className="p-8 text-center text-red-500">Failed to load APIs</div>
@@ -62,6 +63,9 @@ export const ApiRegistryPage = () => {
                       {api.currentStatus}
                     </span>
                   </td>
+                  <td className="p-4 text-sm text-slate-500">
+                    {api.lastCheckedAt ? new Date(api.lastCheckedAt).toLocaleString() : 'Never'}
+                  </td>
                   <td className="p-4 text-right">
                     <div className="flex items-center justify-end space-x-2">
                       {api.enabled ? (
@@ -76,6 +80,16 @@ export const ApiRegistryPage = () => {
                       <Link to={`/apis/${api.id}`} className="p-2 text-slate-400 hover:text-indigo-600 transition" title="View/Edit">
                         <Edit className="w-4 h-4" />
                       </Link>
+                      {api.enabled && (
+                        <button
+                          onClick={() => api.id && manualCheck.mutate(api.id)}
+                          disabled={manualCheck.isPending}
+                          className="p-2 text-slate-400 hover:text-indigo-600 transition"
+                          title="Run Check Now"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${manualCheck.isPending ? 'animate-spin' : ''}`} />
+                        </button>
+                      )}
                       <button onClick={() => {
                         if (window.confirm(`Delete ${api.name}? This will remove its registry configuration.`)) {
                           if(api.id) deleteApi.mutate(api.id)

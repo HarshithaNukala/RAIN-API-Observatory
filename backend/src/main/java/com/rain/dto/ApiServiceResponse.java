@@ -21,6 +21,9 @@ public class ApiServiceResponse {
     private ApiStatus currentStatus;
     private Instant createdAt;
     private Instant updatedAt;
+    private String requestBody;
+    private Instant lastCheckedAt;
+    private Instant nextCheckAt;
     private List<ApiHeaderResponse> headers;
 
     public ApiServiceResponse() {
@@ -64,6 +67,15 @@ public class ApiServiceResponse {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public String getRequestBody() { return requestBody; }
+    public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
+
+    public Instant getLastCheckedAt() { return lastCheckedAt; }
+    public void setLastCheckedAt(Instant lastCheckedAt) { this.lastCheckedAt = lastCheckedAt; }
+
+    public Instant getNextCheckAt() { return nextCheckAt; }
+    public void setNextCheckAt(Instant nextCheckAt) { this.nextCheckAt = nextCheckAt; }
 
     public List<ApiHeaderResponse> getHeaders() { return headers; }
     public void setHeaders(List<ApiHeaderResponse> headers) { this.headers = headers; }

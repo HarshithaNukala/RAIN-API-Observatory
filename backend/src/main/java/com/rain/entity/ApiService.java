@@ -52,6 +52,15 @@ public class ApiService {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Column(name = "request_body", columnDefinition = "TEXT")
+    private String requestBody;
+
+    @Column(name = "last_checked_at")
+    private Instant lastCheckedAt;
+
+    @Column(name = "next_check_at")
+    private Instant nextCheckAt;
+
     @OneToMany(mappedBy = "apiService", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ApiHeader> headers = new ArrayList<>();
 
@@ -121,6 +130,15 @@ public class ApiService {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public String getRequestBody() { return requestBody; }
+    public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
+
+    public Instant getLastCheckedAt() { return lastCheckedAt; }
+    public void setLastCheckedAt(Instant lastCheckedAt) { this.lastCheckedAt = lastCheckedAt; }
+
+    public Instant getNextCheckAt() { return nextCheckAt; }
+    public void setNextCheckAt(Instant nextCheckAt) { this.nextCheckAt = nextCheckAt; }
 
     public List<ApiHeader> getHeaders() { return headers; }
     public void setHeaders(List<ApiHeader> headers) { 

@@ -17,9 +17,12 @@ export interface ApiService {
   latencyThresholdMs: number;
   checkIntervalSeconds: number;
   enabled?: boolean;
-  currentStatus?: string;
+  currentStatus?: 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'PAUSED';
   createdAt?: string;
   updatedAt?: string;
+  requestBody?: string;
+  lastCheckedAt?: string;
+  nextCheckAt?: string;
   headers?: ApiHeader[];
 }
 
@@ -102,6 +105,21 @@ export const useDeleteApi = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['apis'] })
+    }
+  })
+}
+
+export const useManualCheckApi = () => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`${API_BASE}/${id}/check`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to check API')
+      return res.json()
+    },
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['apis'] })
+      queryClient.invalidateQueries({ queryKey: ['apis', String(id)] })
     }
   })
 }
