@@ -32,8 +32,18 @@ Telemetry converts raw health checks into reliable platform metrics:
 - **Paused APIs**: Paused APIs do not generate new health checks, so they do not contribute to ongoing telemetry, but their historical checks remain part of metric calculations.
 - **Future Retention Strategy**: Future phases will implement data rollups (partitioning or materialized views) to manage the growing `health_checks` table.
 
-### Future Role: Incident Engine
-*(FUTURE PHASE)* Automated incident detection will analyze telemetry data and trigger alerts/incidents when an API fails consecutively or drops below performance thresholds.
+### Incident Engine (Phase 5)
+Automated incident detection analyzes health check telemetry and manages the incident lifecycle:
+- **One Incident Per Outage**: One continuous failure period produces exactly ONE incident (Open -> Resolved).
+- **Concurrency & Transaction Safety**: The system enforces the rule "at most ONE OPEN incident per API" via:
+  1. **Application-level Serialization**: JPA `@Lock(LockModeType.PESSIMISTIC_WRITE)` strictly serializes state transitions during health check processing.
+  2. **Database Guarantee**: A PostgreSQL partial unique index (`uq_incidents_one_open_per_api WHERE status = 'OPEN'`) guarantees safety.
+- **Incident Lifecycle**:
+  - `DOWN` status creates a new `OPEN` incident or increments the failure count of an existing one.
+  - `HEALTHY` or `DEGRADED` status resolves an `OPEN` incident. `DEGRADED` does not *create* an incident (reserving incidents for actual outages).
+- **Timestamps**: Incident `startedAt` and `resolvedAt` are set to the actual observation time of the underlying health check, ensuring accurate MTTR.
+- **Paused APIs**: If an incident is `OPEN` when an API is paused, it remains `OPEN`. Pausing does not magically resolve outages.
+- **Normalization**: Error strings and HTTP statuses are not duplicated in the `incidents` table. They are projected from the associated `latest_health_check_id` via `IncidentDto`.
 
 ## PostgreSQL Layer (Database)
 - **Why PostgreSQL**: Rock-solid, open-source relational database. Perfect for structured telemetry, configurations, and incidents.

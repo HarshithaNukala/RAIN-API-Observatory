@@ -3,10 +3,15 @@ package com.rain.monitoring;
 import com.rain.entity.ApiService;
 import com.rain.entity.ApiStatus;
 import com.rain.entity.HealthCheck;
+import com.rain.entity.Incident;
+import com.rain.entity.IncidentStatus;
 import com.rain.repository.ApiServiceRepository;
 import com.rain.repository.HealthCheckRepository;
+import com.rain.repository.IncidentRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 
 import java.time.Instant;
 
@@ -16,13 +21,25 @@ public class MonitoringEngineService {
     private final HealthCheckExecutor healthCheckExecutor;
     private final HealthCheckRepository healthCheckRepository;
     private final ApiServiceRepository apiServiceRepository;
+    private final IncidentRepository incidentRepository;
+
+    @Autowired
+    @Lazy
+    private MonitoringEngineService self;
 
     public MonitoringEngineService(HealthCheckExecutor healthCheckExecutor,
                                    HealthCheckRepository healthCheckRepository,
-                                   ApiServiceRepository apiServiceRepository) {
+                                   ApiServiceRepository apiServiceRepository,
+                                   IncidentRepository incidentRepository) {
         this.healthCheckExecutor = healthCheckExecutor;
         this.healthCheckRepository = healthCheckRepository;
         this.apiServiceRepository = apiServiceRepository;
+        this.incidentRepository = incidentRepository;
+    }
+
+    // For unit testing only
+    void setSelf(MonitoringEngineService self) {
+        this.self = self;
     }
 
     public HealthCheck executeAndSaveCheck(Long apiServiceId) {
@@ -53,13 +70,14 @@ public class MonitoringEngineService {
             newStatus = ApiStatus.DOWN;
         } // else DOWN (timeout/error)
 
-        // Save result in a short transaction
-        return saveResultAndUpdateStatus(apiServiceId, now, result, newStatus, success);
+        // Save result in a short transaction via self-proxy
+        return self.saveResultAndUpdateStatus(apiServiceId, now, result, newStatus, success);
     }
 
     @Transactional
     protected HealthCheck saveResultAndUpdateStatus(Long apiServiceId, Instant checkedAt, HealthCheckResult result, ApiStatus newStatus, boolean success) {
-        ApiService apiService = apiServiceRepository.findById(apiServiceId).orElse(null);
+        // MUST acquire pessimistic write lock first to serialize
+        ApiService apiService = apiServiceRepository.findWithLockById(apiServiceId).orElse(null);
         if (apiService == null) {
             return null;
         }
@@ -84,6 +102,32 @@ public class MonitoringEngineService {
         }
 
         HealthCheck saved = healthCheckRepository.save(check);
+
+        // Evaluate Incident Lifecycle
+        Incident openIncident = incidentRepository.findTopByApiServiceIdAndStatusOrderByIdDesc(apiServiceId, IncidentStatus.OPEN).orElse(null);
+        
+        if (!success) {
+            if (openIncident == null) {
+                Incident newIncident = new Incident();
+                newIncident.setApiService(apiService);
+                newIncident.setStatus(IncidentStatus.OPEN);
+                newIncident.setStartedAt(checkedAt); // Real observation time
+                newIncident.setFirstHealthCheck(saved);
+                newIncident.setLatestHealthCheck(saved);
+                newIncident.setFailureCount(1);
+                incidentRepository.save(newIncident);
+            } else {
+                openIncident.setLatestHealthCheck(saved);
+                openIncident.setFailureCount(openIncident.getFailureCount() + 1);
+                incidentRepository.save(openIncident);
+            }
+        } else {
+            if (openIncident != null) {
+                openIncident.setStatus(IncidentStatus.RESOLVED);
+                openIncident.setResolvedAt(checkedAt); // Real observation time
+                incidentRepository.save(openIncident);
+            }
+        }
 
         // Update API
         apiService.setCurrentStatus(newStatus);

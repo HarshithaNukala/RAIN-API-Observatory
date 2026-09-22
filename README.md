@@ -4,8 +4,8 @@
 
 RAIN is a third-party API reliability monitoring platform. It allows developers to register external APIs, configure monitoring schedules, perform automated health checks, measure uptime, and track incidents.
 
-## Current Phase: Phase 4 (Telemetry & Metrics)
-This project is being developed phase-by-phase. We have completed Phase 4, which introduces the Telemetry Engine to aggregate check data into dashboard summaries, latency series (P95), and success/failure rates.
+## Current Phase: Phase 5 (Incident Engine)
+This project is being developed phase-by-phase. We have completed Phase 5, which introduces the Incident Engine to convert continuous API failures into meaningful incidents using pessimistic locking for safe concurrent lifecycle management.
 
 ## Problem Statement
 Third-party APIs frequently fail, change, or degrade in performance. Developers often discover these issues only when their users report them. RAIN provides an observatory to monitor external API reliability proactively.
@@ -64,7 +64,7 @@ GET http://localhost:8080/api/health
 ```
 
 ## Future Phases
-- Incident Engine (Phase 5)
+- Analytics and dashboarding (Phase 6)
 - Real-time updates and notifications
 - Analytics and dashboarding
 - Authentication and authorization

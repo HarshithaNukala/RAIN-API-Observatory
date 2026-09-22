@@ -6,6 +6,7 @@ import com.rain.entity.HealthCheck;
 import com.rain.entity.HttpMethod;
 import com.rain.repository.ApiServiceRepository;
 import com.rain.repository.HealthCheckRepository;
+import com.rain.repository.IncidentRepository;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
@@ -29,6 +30,7 @@ class MonitoringEngineServiceTest {
     private MonitoringEngineService monitoringEngineService;
     private ApiServiceRepository apiServiceRepository;
     private HealthCheckRepository healthCheckRepository;
+    private IncidentRepository incidentRepository;
     private SsrfValidator ssrfValidator;
 
     @BeforeEach
@@ -44,7 +46,9 @@ class MonitoringEngineServiceTest {
         
         apiServiceRepository = mock(ApiServiceRepository.class);
         healthCheckRepository = mock(HealthCheckRepository.class);
-        monitoringEngineService = new MonitoringEngineService(executor, healthCheckRepository, apiServiceRepository);
+        incidentRepository = mock(IncidentRepository.class);
+        monitoringEngineService = new MonitoringEngineService(executor, healthCheckRepository, apiServiceRepository, incidentRepository);
+        monitoringEngineService.setSelf(monitoringEngineService);
     }
 
     @AfterEach
@@ -67,6 +71,7 @@ class MonitoringEngineServiceTest {
         apiService.setCheckIntervalSeconds(60);
 
         when(apiServiceRepository.findById(1L)).thenReturn(Optional.of(apiService));
+        when(apiServiceRepository.findWithLockById(1L)).thenReturn(Optional.of(apiService));
         when(healthCheckRepository.save(any(HealthCheck.class))).thenAnswer(i -> i.getArgument(0));
 
         HealthCheck result = monitoringEngineService.executeAndSaveCheck(1L);
@@ -95,6 +100,7 @@ class MonitoringEngineServiceTest {
         apiService.setCheckIntervalSeconds(60);
 
         when(apiServiceRepository.findById(2L)).thenReturn(Optional.of(apiService));
+        when(apiServiceRepository.findWithLockById(2L)).thenReturn(Optional.of(apiService));
         when(healthCheckRepository.save(any(HealthCheck.class))).thenAnswer(i -> i.getArgument(0));
 
         HealthCheck result = monitoringEngineService.executeAndSaveCheck(2L);
