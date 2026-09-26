@@ -7,6 +7,7 @@ import com.rain.entity.ApiStatus;
 import com.rain.entity.HttpMethod;
 import com.rain.exception.ResourceNotFoundException;
 import com.rain.repository.ApiServiceRepository;
+import com.rain.repository.IncidentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -25,12 +26,16 @@ public class ApiRegistryServiceTest {
     @Mock
     private ApiServiceRepository repository;
 
+    @Mock
+    private IncidentRepository incidentRepository;
+
     @InjectMocks
     private ApiRegistryService service;
 
     @BeforeEach
     public void setUp() {
         MockitoAnnotations.openMocks(this);
+        when(incidentRepository.findApiIdsByStatus(any())).thenReturn(java.util.Collections.emptySet());
     }
 
     @Test

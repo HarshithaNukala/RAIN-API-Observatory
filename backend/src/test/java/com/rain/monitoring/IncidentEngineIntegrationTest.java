@@ -223,4 +223,38 @@ public class IncidentEngineIntegrationTest {
         assertThat(incidents).hasSize(2);
         assertThat(incidents.get(0).getApiService().getId()).isNotEqualTo(incidents.get(1).getApiService().getId());
     }
+    @Test
+    void testConcurrencyOneOpenIncidentConstraint() throws InterruptedException {
+        int threadCount = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch latch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(threadCount);
+
+        AtomicInteger exceptions = new AtomicInteger(0);
+
+        mockExecutor(false, 500, 100, "CONCURRENT_ERR");
+
+        for (int i = 0; i < threadCount; i++) {
+            executor.submit(() -> {
+                try {
+                    latch.await();
+                    monitoringEngineService.executeAndSaveCheck(apiService.getId());
+                } catch (Exception e) {
+                    exceptions.incrementAndGet();
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        latch.countDown(); // Release all threads
+        doneLatch.await(10, TimeUnit.SECONDS);
+        executor.shutdown();
+
+        List<Incident> openIncidents = incidentRepository.findAll().stream()
+                .filter(inc -> inc.getStatus() == IncidentStatus.OPEN)
+                .toList();
+
+        assertThat(openIncidents.size()).isLessThanOrEqualTo(1);
+    }
 }

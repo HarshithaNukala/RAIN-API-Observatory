@@ -25,6 +25,7 @@ public class ApiServiceResponse {
     private Instant lastCheckedAt;
     private Instant nextCheckAt;
     private List<ApiHeaderResponse> headers;
+    private Boolean hasActiveIncident;
 
     public ApiServiceResponse() {
     }
@@ -79,4 +80,7 @@ public class ApiServiceResponse {
 
     public List<ApiHeaderResponse> getHeaders() { return headers; }
     public void setHeaders(List<ApiHeaderResponse> headers) { this.headers = headers; }
+
+    public Boolean getHasActiveIncident() { return hasActiveIncident; }
+    public void setHasActiveIncident(Boolean hasActiveIncident) { this.hasActiveIncident = hasActiveIncident; }
 }

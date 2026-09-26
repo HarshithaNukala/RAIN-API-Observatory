@@ -19,6 +19,11 @@ public interface IncidentRepository extends JpaRepository<Incident, Long> {
     @Query("SELECT i FROM Incident i JOIN FETCH i.latestHealthCheck WHERE i.apiService.id = :apiServiceId ORDER BY i.startedAt DESC")
     List<Incident> findRecentByApiServiceId(@Param("apiServiceId") Long apiServiceId, Pageable pageable);
 
-    @Query("SELECT i FROM Incident i JOIN FETCH i.latestHealthCheck ORDER BY i.startedAt DESC")
+    @Query("SELECT i FROM Incident i ORDER BY i.id DESC")
     List<Incident> findRecent(Pageable pageable);
+
+    long countByStatus(IncidentStatus status);
+
+    @Query("SELECT DISTINCT i.apiService.id FROM Incident i WHERE i.status = :status")
+    java.util.Set<Long> findApiIdsByStatus(@Param("status") IncidentStatus status);
 }

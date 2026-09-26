@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 
 @Component
+@ConditionalOnProperty(name = "monitoring.scheduler.enabled", matchIfMissing = true)
 public class MonitoringScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(MonitoringScheduler.class);

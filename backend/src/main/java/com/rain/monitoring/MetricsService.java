@@ -4,6 +4,8 @@ import com.rain.dto.*;
 import com.rain.entity.ApiService;
 import com.rain.entity.ApiStatus;
 import com.rain.repository.ApiServiceRepository;
+import com.rain.repository.IncidentRepository;
+import com.rain.entity.IncidentStatus;
 import com.rain.repository.MetricsRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,10 +19,12 @@ public class MetricsService {
 
     private final MetricsRepository metricsRepository;
     private final ApiServiceRepository apiServiceRepository;
+    private final IncidentRepository incidentRepository;
 
-    public MetricsService(MetricsRepository metricsRepository, ApiServiceRepository apiServiceRepository) {
+    public MetricsService(MetricsRepository metricsRepository, ApiServiceRepository apiServiceRepository, IncidentRepository incidentRepository) {
         this.metricsRepository = metricsRepository;
         this.apiServiceRepository = apiServiceRepository;
+        this.incidentRepository = incidentRepository;
     }
 
     @Transactional(readOnly = true)
@@ -47,6 +51,7 @@ public class MetricsService {
         summary.setDegradedApis(degradedApis);
         summary.setDownApis(downApis);
         summary.setUnknownApis(unknownApis);
+        summary.setActiveIncidents(incidentRepository.countByStatus(IncidentStatus.OPEN));
 
         return summary;
     }

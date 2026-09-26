@@ -15,6 +15,7 @@ export interface DashboardSummaryResponse {
   overallCheckBasedUptimePercentage: number | null;
   overallAverageResponseLatencyMs: number | null;
   overallP95ResponseLatencyMs: number | null;
+  activeIncidents: number;
 }
 
 export interface ApiMetricsResponse {

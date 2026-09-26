@@ -9,6 +9,8 @@ import com.rain.entity.ApiService;
 import com.rain.entity.ApiStatus;
 import com.rain.exception.ResourceNotFoundException;
 import com.rain.repository.ApiServiceRepository;
+import com.rain.repository.IncidentRepository;
+import com.rain.entity.IncidentStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,15 +24,22 @@ import java.util.stream.Collectors;
 public class ApiRegistryService {
 
     private final ApiServiceRepository repository;
+    private final IncidentRepository incidentRepository;
 
-    public ApiRegistryService(ApiServiceRepository repository) {
+    public ApiRegistryService(ApiServiceRepository repository, IncidentRepository incidentRepository) {
         this.repository = repository;
+        this.incidentRepository = incidentRepository;
     }
 
     @Transactional(readOnly = true)
     public List<ApiServiceResponse> getAllServices() {
+        java.util.Set<Long> apisWithIncidents = incidentRepository.findApiIdsByStatus(IncidentStatus.OPEN);
         return repository.findAll().stream()
-                .map(service -> mapToResponse(service, false)) // Do not include headers in list view
+                .map(service -> {
+                    ApiServiceResponse response = mapToResponse(service, false);
+                    response.setHasActiveIncident(apisWithIncidents.contains(service.getId()));
+                    return response;
+                })
                 .collect(Collectors.toList());
     }
 
@@ -38,7 +47,10 @@ public class ApiRegistryService {
     public ApiServiceResponse getServiceById(Long id) {
         ApiService service = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("API Service not found with id: " + id));
-        return mapToResponse(service, true); // Include safe header metadata
+        ApiServiceResponse response = mapToResponse(service, true); // Include safe header metadata
+        java.util.Set<Long> apisWithIncidents = incidentRepository.findApiIdsByStatus(IncidentStatus.OPEN);
+        response.setHasActiveIncident(apisWithIncidents.contains(service.getId()));
+        return response;
     }
 
     @Transactional
@@ -50,7 +62,9 @@ public class ApiRegistryService {
         service.setCurrentStatus(ApiStatus.UNKNOWN);
         service.setNextCheckAt(java.time.Instant.now());
         ApiService saved = repository.save(service);
-        return mapToResponse(saved, true);
+        ApiServiceResponse response = mapToResponse(saved, true);
+        response.setHasActiveIncident(false); // Brand new service has no incidents
+        return response;
     }
 
     @Transactional
@@ -67,7 +81,10 @@ public class ApiRegistryService {
         }
         
         ApiService saved = repository.save(service);
-        return mapToResponse(saved, true);
+        ApiServiceResponse response = mapToResponse(saved, true);
+        java.util.Set<Long> apisWithIncidents = incidentRepository.findApiIdsByStatus(IncidentStatus.OPEN);
+        response.setHasActiveIncident(apisWithIncidents.contains(saved.getId()));
+        return response;
     }
 
     @Transactional
@@ -85,7 +102,10 @@ public class ApiRegistryService {
         service.setEnabled(false);
         service.setCurrentStatus(ApiStatus.PAUSED);
         ApiService saved = repository.save(service);
-        return mapToResponse(saved, true);
+        ApiServiceResponse response = mapToResponse(saved, true);
+        java.util.Set<Long> apisWithIncidents = incidentRepository.findApiIdsByStatus(IncidentStatus.OPEN);
+        response.setHasActiveIncident(apisWithIncidents.contains(saved.getId()));
+        return response;
     }
 
     @Transactional
@@ -96,7 +116,10 @@ public class ApiRegistryService {
         service.setCurrentStatus(ApiStatus.UNKNOWN);
         service.setNextCheckAt(java.time.Instant.now());
         ApiService saved = repository.save(service);
-        return mapToResponse(saved, true);
+        ApiServiceResponse response = mapToResponse(saved, true);
+        java.util.Set<Long> apisWithIncidents = incidentRepository.findApiIdsByStatus(IncidentStatus.OPEN);
+        response.setHasActiveIncident(apisWithIncidents.contains(saved.getId()));
+        return response;
     }
 
     private void validateUrl(String urlString) {

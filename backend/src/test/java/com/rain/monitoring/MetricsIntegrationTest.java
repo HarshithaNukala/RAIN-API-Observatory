@@ -9,6 +9,9 @@ import com.rain.entity.HealthCheck;
 import com.rain.entity.HttpMethod;
 import com.rain.repository.ApiServiceRepository;
 import com.rain.repository.HealthCheckRepository;
+import com.rain.repository.IncidentRepository;
+import com.rain.entity.Incident;
+import com.rain.entity.IncidentStatus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,9 +35,13 @@ public class MetricsIntegrationTest {
     @Autowired
     private HealthCheckRepository healthCheckRepository;
 
+    @Autowired
+    private IncidentRepository incidentRepository;
+
     @BeforeEach
     @AfterEach
     void cleanUp() {
+        incidentRepository.deleteAll();
         healthCheckRepository.deleteAll();
         apiServiceRepository.deleteAll();
     }
@@ -172,5 +179,56 @@ public class MetricsIntegrationTest {
         assertNull(metrics.getAverageResponseLatencyMs());
         assertNull(metrics.getP95ResponseLatencyMs());
         assertEquals(ApiStatus.UNKNOWN, metrics.getCurrentStatus());
+    }
+
+    @Test
+    void testActiveIncidentsCountIncludesPausedApiWithOpenIncident() {
+        // Create API
+        ApiService api = new ApiService();
+        api.setName("API Incidents");
+        api.setUrl("http://incidents.com");
+        api.setMethod(HttpMethod.GET);
+        api.setExpectedStatusCode(200);
+        api.setTimeoutMs(5000);
+        api.setLatencyThresholdMs(5000);
+        api.setCheckIntervalSeconds(30);
+        api.setCurrentStatus(ApiStatus.DOWN); // Start as DOWN
+        api.setEnabled(true);
+        api = apiServiceRepository.save(api);
+
+        // Create a dummy HealthCheck for the incident
+        HealthCheck hc = new HealthCheck();
+        hc.setApiService(api);
+        hc.setCheckedAt(Instant.now().minusSeconds(100));
+        hc.setSuccess(false);
+        hc.setStatus(ApiStatus.DOWN);
+        hc = healthCheckRepository.save(hc);
+
+        // Create an OPEN incident
+        Incident incident = new Incident();
+        incident.setApiService(api);
+        incident.setStatus(IncidentStatus.OPEN);
+        incident.setStartedAt(Instant.now().minusSeconds(100));
+        incident.setFailureCount(5);
+        incident.setFirstHealthCheck(hc);
+        incident.setLatestHealthCheck(hc);
+        incidentRepository.save(incident);
+
+        // Check activeIncidents initially
+        DashboardSummaryResponse summary = metricsService.getDashboardSummary(TimeWindow.W_1H);
+        assertEquals(1, summary.getActiveIncidents());
+        assertEquals(1, summary.getDownApis());
+        assertEquals(0, summary.getPausedApis());
+
+        // Now PAUSE the API
+        api.setCurrentStatus(ApiStatus.PAUSED);
+        api.setEnabled(false);
+        apiServiceRepository.save(api);
+
+        // Check activeIncidents after pause
+        summary = metricsService.getDashboardSummary(TimeWindow.W_1H);
+        assertEquals(1, summary.getActiveIncidents()); // The incident is STILL open!
+        assertEquals(0, summary.getDownApis());        // But downApis is 0
+        assertEquals(1, summary.getPausedApis());      // And pausedApis is 1
     }
 }

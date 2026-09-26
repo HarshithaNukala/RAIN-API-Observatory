@@ -15,6 +15,7 @@ public class DashboardSummaryResponse {
     private Double overallCheckBasedUptimePercentage;
     private Double overallAverageResponseLatencyMs;
     private Double overallP95ResponseLatencyMs;
+    private Long activeIncidents;
 
     public DashboardSummaryResponse() {}
 
@@ -46,4 +47,6 @@ public class DashboardSummaryResponse {
     public void setOverallAverageResponseLatencyMs(Double overallAverageResponseLatencyMs) { this.overallAverageResponseLatencyMs = overallAverageResponseLatencyMs; }
     public Double getOverallP95ResponseLatencyMs() { return overallP95ResponseLatencyMs; }
     public void setOverallP95ResponseLatencyMs(Double overallP95ResponseLatencyMs) { this.overallP95ResponseLatencyMs = overallP95ResponseLatencyMs; }
+    public Long getActiveIncidents() { return activeIncidents; }
+    public void setActiveIncidents(Long activeIncidents) { this.activeIncidents = activeIncidents; }
 }

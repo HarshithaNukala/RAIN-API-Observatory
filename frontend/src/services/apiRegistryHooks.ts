@@ -24,6 +24,7 @@ export interface ApiService {
   lastCheckedAt?: string;
   nextCheckAt?: string;
   headers?: ApiHeader[];
+  hasActiveIncident?: boolean;
 }
 
 const API_BASE = '/api/services'
@@ -35,7 +36,8 @@ export const useApis = () => {
       const res = await fetch(API_BASE)
       if (!res.ok) throw new Error('Failed to fetch APIs')
       return res.json()
-    }
+    },
+    refetchInterval: 30000
   })
 }
 
