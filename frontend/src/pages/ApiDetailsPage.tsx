@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useApi, useDeleteApi, usePauseApi, useResumeApi, useManualCheckApi } from '../services/apiRegistryHooks'
 import { ArrowLeft, Play, Pause, Trash2, Settings, Activity, RefreshCw } from 'lucide-react'
 import { ApiMetrics } from '../components/ApiMetrics'
+import { IntelligencePanel } from '../components/IntelligencePanel'
 
 export const ApiDetailsPage = () => {
   const { id } = useParams<{ id: string }>()
@@ -75,6 +76,9 @@ export const ApiDetailsPage = () => {
       </div>
 
       <div className="grid grid-cols-3 gap-6">
+        <div className="col-span-3">
+          <IntelligencePanel serviceId={api.id!} />
+        </div>
         <div className="col-span-2 space-y-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Configuration</h3>

@@ -1,19 +1,65 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import type { LatencySeriesPoint } from '../types/metrics';
+import type { Anomaly } from '../types/intelligence';
 
 interface LatencyChartProps {
   data: LatencySeriesPoint[];
+  anomalies?: Anomaly[];
 }
 
-export const LatencyChart = ({ data }: LatencyChartProps) => {
+const formatTime = (timeStr: string) => {
+  const date = new Date(timeStr);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    name: string;
+    value: number;
+    color: string;
+  }>;
+  label?: string;
+  anomalies?: Anomaly[];
+}
+
+const CustomTooltip = ({ active, payload, label, anomalies = [] }: CustomTooltipProps) => {
+  if (active && payload && payload.length && label) {
+    const pointTime = label;
+    const anomaly = anomalies.find((a: Anomaly) => new Date(a.checkedAt).getTime() === new Date(pointTime).getTime());
+    
+    return (
+      <div className="bg-white p-3 border border-slate-200 rounded-lg shadow-md text-sm">
+        <p className="font-semibold text-slate-700 mb-2">{new Date(pointTime).toLocaleString()}</p>
+        {payload.map((entry, index) => (
+          <p key={index} style={{ color: entry.color }} className="flex justify-between w-32">
+            <span>{entry.name}:</span>
+            <span className="font-medium">{entry.value}ms</span>
+          </p>
+        ))}
+        {anomaly && (
+          <div className="mt-2 pt-2 border-t border-slate-100">
+            <p className="text-red-600 font-semibold flex items-center">
+              <span className="w-2 h-2 rounded-full bg-red-500 mr-2"></span>
+              Anomaly Detected
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              Baseline Avg: {Math.round(anomaly.baselineAvgMs)}ms
+              <br />
+              Baseline StdDev: {Math.round(anomaly.baselineStdDevMs)}ms
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+};
+
+export const LatencyChart = ({ data, anomalies = [] }: LatencyChartProps) => {
   if (!data || data.length === 0) {
     return <div className="h-64 flex items-center justify-center text-slate-400">No latency data available.</div>;
   }
-
-  const formatTime = (timeStr: string) => {
-    const date = new Date(timeStr);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
 
   return (
     <div className="h-72 w-full">
@@ -34,10 +80,7 @@ export const LatencyChart = ({ data }: LatencyChartProps) => {
             tickFormatter={(val) => `${val}ms`}
             width={60}
           />
-          <Tooltip 
-            labelFormatter={(label) => new Date(label as string | number).toLocaleString()}
-            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-          />
+          <Tooltip content={<CustomTooltip anomalies={anomalies} />} />
           <Line 
             type="monotone" 
             dataKey="p95ResponseLatencyMs" 
@@ -54,6 +97,17 @@ export const LatencyChart = ({ data }: LatencyChartProps) => {
             strokeWidth={2}
             dot={false}
           />
+          {anomalies.map((anomaly, idx) => (
+            <ReferenceDot 
+              key={idx} 
+              x={new Date(anomaly.checkedAt).toISOString()} 
+              y={anomaly.latencyMs} 
+              r={4} 
+              fill="red" 
+              stroke="white" 
+              strokeWidth={2} 
+            />
+          ))}
         </LineChart>
       </ResponsiveContainer>
     </div>

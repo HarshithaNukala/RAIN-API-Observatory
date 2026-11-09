@@ -3,12 +3,14 @@ import { useApiMetrics, useLatencySeries, useSuccessFailureSeries } from '../ser
 import type { TimeWindow } from '../types/metrics';
 import { LatencyChart } from './LatencyChart';
 import { SuccessFailureChart } from './SuccessFailureChart';
+import { useServiceIntelligence } from '../services/intelligenceHooks';
 
 export const ApiMetrics = ({ apiId }: { apiId: number }) => {
   const [window, setWindow] = useState<TimeWindow>('24h');
   const { data: metrics, isLoading: isMetricsLoading } = useApiMetrics(apiId, window);
   const { data: latencySeries } = useLatencySeries(apiId, window);
   const { data: successFailureSeries } = useSuccessFailureSeries(apiId, window);
+  const { data: intelligence } = useServiceIntelligence(apiId, window);
 
   if (isMetricsLoading) return <div className="text-sm text-slate-500">Loading metrics...</div>;
   if (!metrics) return <div className="text-sm text-red-500">Failed to load metrics.</div>;
@@ -61,7 +63,7 @@ export const ApiMetrics = ({ apiId }: { apiId: number }) => {
 
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
             <h4 className="text-sm font-semibold text-slate-700 mb-4">Latency History</h4>
-            {latencySeries && <LatencyChart data={latencySeries} />}
+            {latencySeries && <LatencyChart data={latencySeries} anomalies={intelligence?.anomalies} />}
           </div>
 
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
