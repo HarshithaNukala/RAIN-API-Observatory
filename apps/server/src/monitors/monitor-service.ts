@@ -15,7 +15,9 @@ import {
   type MonitorMethod,
   type MonitorStatus,
   type MonitorSummary,
+  type MonitorUpdateMeta,
   type UpdateMonitor,
+  monitorOrigin,
 } from '@rain/shared';
 import type { SealedSecret, SecretBox } from '../crypto/secret-box.js';
 import type { ProfileStore } from '../db/profiles.js';
@@ -30,11 +32,16 @@ import type {
   MonitorSummaryRow,
 } from './monitor-repository.js';
 
+export interface MonitorUpdateResult {
+  monitor: Monitor;
+  meta: MonitorUpdateMeta;
+}
+
 export interface MonitorService {
   create(ownerId: string, input: CreateMonitor): Promise<Monitor>;
   list(ownerId: string, query: MonitorListQuery): Promise<MonitorList>;
   get(ownerId: string, monitorId: string): Promise<Monitor>;
-  update(ownerId: string, monitorId: string, patch: UpdateMonitor): Promise<Monitor>;
+  update(ownerId: string, monitorId: string, patch: UpdateMonitor): Promise<MonitorUpdateResult>;
   updateHeaders(ownerId: string, monitorId: string, update: MonitorHeaderUpdate): Promise<Monitor>;
   pause(ownerId: string, monitorId: string): Promise<Monitor>;
   resume(ownerId: string, monitorId: string): Promise<Monitor>;
@@ -57,6 +64,14 @@ export const monitorNotFound = () => new AppError(404, 'MONITOR_NOT_FOUND', 'Mon
 
 const validationError = (issues: Array<{ path: string; message: string }>) =>
   new AppError(400, 'VALIDATION_ERROR', 'Request validation failed', issues);
+
+// Deliberately generic: it says neither which secrets exist nor anything about their values.
+export const originChangeConfirmationRequired = () =>
+  new AppError(
+    409,
+    'MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED',
+    'Changing the destination will remove the saved request headers and request body, because they were entered for the current destination. Send confirmOriginChange: true to proceed, then enter them again for the new destination.',
+  );
 
 // Encryption contexts tie each ciphertext to the row it was written for.
 const bodyContext = (monitorId: string) => `monitor-body:${monitorId}`;
@@ -242,20 +257,43 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
         const current = await tx.findById(ownerId, monitorId, { forUpdate: true });
         if (!current) throw monitorNotFound();
 
+        // Saved headers and body were entered for the current destination. Moving the monitor to
+        // another origin must not silently send them somewhere else.
+        const originChanged =
+          patch.url !== undefined && monitorOrigin(patch.url) !== monitorOrigin(current.url);
+        const storedHeaders = originChanged ? await tx.listHeaders(ownerId, monitorId) : [];
+        const hasSavedSecrets = storedHeaders.length > 0 || current.requestBodyCiphertext !== null;
+        const clearSaved = originChanged && hasSavedSecrets;
+        if (clearSaved && patch.confirmOriginChange !== true) {
+          throw originChangeConfirmationRequired();
+        }
+        if (clearSaved) {
+          await tx.deleteHeaders(
+            ownerId,
+            monitorId,
+            storedHeaders.map((h) => h.id),
+          );
+        }
+
         const bodyChanged = 'requestBody' in patch;
-        const requestBody = bodyChanged ? (patch.requestBody ?? null) : openBody(current);
+        const requestBody = bodyChanged
+          ? (patch.requestBody ?? null)
+          : clearSaved
+            ? null
+            : openBody(current);
         // A kept body sealed with a retired key is re-encrypted with the current one, so stored
         // data migrates off old keys as monitors are edited.
         const rewrapBody =
           !bodyChanged &&
+          !clearSaved &&
           requestBody !== null &&
           current.requestBodyKeyVersion !== secretBox.currentKeyVersion;
         // An explicitly supplied content type is validated as given; otherwise the stored one
-        // is kept while a body exists and dropped with it.
+        // is kept while the stored body is kept, and dropped with it.
         const declaredContentType =
           'bodyContentType' in patch
             ? (patch.bodyContentType ?? null)
-            : requestBody
+            : requestBody && !clearSaved
               ? current.bodyContentType
               : null;
         const issues = findMonitorConfigIssues({
@@ -282,13 +320,16 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
           ...(patch.checkIntervalSeconds !== undefined && {
             checkIntervalSeconds: patch.checkIntervalSeconds,
           }),
-          ...((bodyChanged || rewrapBody) && sealBody(monitorId, requestBody)),
+          ...((bodyChanged || rewrapBody || clearSaved) && sealBody(monitorId, requestBody)),
           bodyContentType: resolveBodyContentType(requestBody, declaredContentType),
         };
         const row = await tx.update(ownerId, monitorId, changes);
         if (!row) throw monitorNotFound();
-        // Headers are never part of this operation: they are read back, not written.
-        return toMonitor(row, await tx.listHeaders(ownerId, monitorId), requestBody);
+        // Apart from an origin change, headers are never written here: they are read back.
+        return {
+          monitor: toMonitor(row, await tx.listHeaders(ownerId, monitorId), requestBody),
+          meta: { originChanged, savedConfigurationCleared: clearSaved },
+        };
       });
     },
 

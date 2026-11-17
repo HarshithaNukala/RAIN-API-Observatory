@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { MonitorHeaderListSchema, MonitorHeaderSummarySchema } from './monitor-headers.js';
-import {
-  MAX_MONITOR_URL_LENGTH,
-  findMonitorUrlProblem,
-  normalizeMonitorUrl,
-} from './monitor-url.js';
+import { MAX_MONITOR_URL_LENGTH, findMonitorUrlIssue, normalizeMonitorUrl } from './monitor-url.js';
 
 /**
  * Methods suitable for a recurring probe. DELETE, TRACE and CONNECT are deliberately excluded.
@@ -70,8 +66,15 @@ export const MonitorUrlSchema = z
   .trim()
   .min(1, 'Enter a URL')
   .superRefine((value, ctx) => {
-    const problem = findMonitorUrlProblem(value);
-    if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    const issue = findMonitorUrlIssue(value);
+    if (issue) {
+      // `params.code` travels to the API error body as the issue's machine-readable code.
+      ctx.addIssue({
+        code: 'custom',
+        message: issue.message,
+        ...(issue.code && { params: { code: issue.code } }),
+      });
+    }
   })
   .transform((value, ctx) => {
     try {
@@ -183,14 +186,31 @@ export type CreateMonitorInput = z.input<typeof CreateMonitorSchema>;
  * Partial update of ordinary settings. Headers are intentionally not accepted here (the schema
  * is strict), so editing a monitor can never erase a stored credential by omission.
  * For `requestBody`: omitted = keep, null = remove, string = replace.
+ *
+ * Changing the URL to a different origin (scheme, host or port) while headers or a request body
+ * are saved is refused with 409 MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED unless
+ * `confirmOriginChange: true` is sent. With it, the saved headers, body and body content type are
+ * removed in the same transaction, so credentials are never sent to a destination they weren't
+ * entered for. A `requestBody` sent in the same request is the new body for the new destination.
  */
 export const UpdateMonitorSchema = z
-  .object(fields)
+  .object({ ...fields, confirmOriginChange: z.boolean() })
   .partial()
   .strict()
-  .refine((patch) => Object.keys(patch).length > 0, 'Provide at least one field to update');
+  .refine(
+    ({ confirmOriginChange: _confirm, ...changes }) => Object.keys(changes).length > 0,
+    'Provide at least one field to update',
+  );
 export type UpdateMonitor = z.infer<typeof UpdateMonitorSchema>;
 export type UpdateMonitorInput = z.input<typeof UpdateMonitorSchema>;
+
+/** What an update did beyond the requested fields. Never says anything about secret contents. */
+export const MonitorUpdateMetaSchema = z.object({
+  originChanged: z.boolean(),
+  /** True when saved headers and/or the saved request body were removed by an origin change. */
+  savedConfigurationCleared: z.boolean(),
+});
+export type MonitorUpdateMeta = z.infer<typeof MonitorUpdateMetaSchema>;
 
 const timestamp = z.iso.datetime({ offset: true });
 
@@ -224,6 +244,13 @@ export const MonitorResponseSchema = MonitorSummarySchema.extend({
   headers: z.array(MonitorHeaderSummarySchema),
 });
 export type Monitor = z.infer<typeof MonitorResponseSchema>;
+
+/** Body of `PATCH /api/v1/monitors/:id`: the updated monitor plus what the update did. */
+export const MonitorUpdateResponseSchema = z.object({
+  data: MonitorResponseSchema,
+  meta: MonitorUpdateMetaSchema,
+});
+export type MonitorUpdateResponse = z.infer<typeof MonitorUpdateResponseSchema>;
 
 export const MONITOR_STATE_FILTERS = ['all', 'enabled', 'paused'] as const;
 

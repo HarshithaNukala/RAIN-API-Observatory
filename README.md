@@ -4,8 +4,8 @@ API uptime and reliability monitoring, rebuilt in TypeScript. This repository re
 Java application (kept read-only at `../RAIN API Observatory` as a reference for business-rule
 migration).
 
-**Current state: Phase 2 — project foundation and authentication.** Monitoring features arrive in
-later phases.
+**Current state: monitor management (configuration, credentials, web UI).** Health checks arrive
+with the monitoring engine in a later phase.
 
 ## Stack
 
@@ -78,11 +78,12 @@ All responses are JSON. Success bodies under `/api` are `{ "data": ... }`; every
 `{ "error": { "code", "message", "requestId", "details?" } }` (see `packages/shared/src/errors.ts`).
 Every response carries an `X-Request-Id` header.
 
-| Endpoint         | Auth   | Purpose                                                           |
-| ---------------- | ------ | ----------------------------------------------------------------- |
-| `GET /healthz`   | none   | Process liveness                                                  |
-| `GET /readyz`    | none   | Database reachable and configuration loaded; `503` when not ready |
-| `GET /api/v1/me` | Bearer | The signed-in user and their profile (created on first call)      |
+| Endpoint            | Auth   | Purpose                                                                                           |
+| ------------------- | ------ | ------------------------------------------------------------------------------------------------- |
+| `GET /healthz`      | none   | Process liveness                                                                                  |
+| `GET /readyz`       | none   | Database reachable and configuration loaded; `503` when not ready                                 |
+| `GET /api/v1/me`    | Bearer | The signed-in user and their profile (created on first call)                                      |
+| `/api/v1/monitors…` | Bearer | Monitor CRUD, headers, pause/resume: see [docs/monitor-management.md](docs/monitor-management.md) |
 
 `/api` routes return `401` for a missing, malformed, invalid or expired token (`TOKEN_EXPIRED`).
 Requests are rate-limited per client IP (120/min) and bodies are capped at 256 kB.
@@ -120,3 +121,5 @@ values unreadable.
 
 - [Supabase setup](docs/supabase-setup.md)
 - [Testing](docs/testing.md)
+- [Monitor management](docs/monitor-management.md)
+- [Monitor network security](docs/security/monitor-network-security.md)

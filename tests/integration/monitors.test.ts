@@ -581,6 +581,90 @@ describe('update', () => {
   });
 });
 
+describe('origin change', () => {
+  beforeAll(async () => {
+    alice = await h.createUser();
+  });
+
+  const withSecrets = () =>
+    createMonitor(alice, {
+      method: 'POST',
+      requestBody: BODY_SECRET,
+      bodyContentType: 'application/json',
+      headers: [{ name: 'Authorization', value: SECRET }],
+    });
+
+  it.each([
+    ['path', 'https://api.example.com/v2/status'],
+    ['query', 'https://api.example.com/health?region=eu'],
+  ])('keeps credentials and body when only the %s changes', async (_label, url) => {
+    const monitor = await withSecrets();
+    const headersBefore = await headerRows(monitor.id);
+    const res = await alice.patch(`/api/v1/monitors/${monitor.id}`, { url }).expect(200);
+    expect(res.body.meta).toEqual({ originChanged: false, savedConfigurationCleared: false });
+    expect(await headerRows(monitor.id)).toEqual(headersBefore);
+    expect(res.body.data.requestBody).toBe(BODY_SECRET);
+  });
+
+  it.each([
+    ['scheme', 'http://api.example.com/health'],
+    ['hostname', 'https://other-api.example.org/health'],
+  ])('refuses a %s change without confirmation and changes nothing', async (_label, url) => {
+    const monitor = await withSecrets();
+    const rowBefore = await monitorRow(monitor.id);
+    const headersBefore = await headerRows(monitor.id);
+
+    const res = await alice
+      .patch(`/api/v1/monitors/${monitor.id}`, { url, name: 'Moved' })
+      .expect(409);
+
+    expect(errorOf(res.body).code).toBe('MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED');
+    expect(JSON.stringify(res.body)).not.toContain(SECRET);
+    expect(await monitorRow(monitor.id)).toEqual(rowBefore);
+    expect(await headerRows(monitor.id)).toEqual(headersBefore);
+  });
+
+  it('refuses a custom port at the API', async () => {
+    const monitor = await withSecrets();
+    const res = await alice
+      .patch(`/api/v1/monitors/${monitor.id}`, { url: 'https://api.example.com:8443/health' })
+      .expect(400);
+    expect(errorOf(res.body).code).toBe('UNSUPPORTED_PORT');
+  });
+
+  it('on confirmation deletes header rows and the body in one transaction', async () => {
+    const monitor = await withSecrets();
+    const res = await alice
+      .patch(`/api/v1/monitors/${monitor.id}`, {
+        url: 'https://other-api.example.org/health',
+        confirmOriginChange: true,
+      })
+      .expect(200);
+
+    expect(res.body.meta).toEqual({ originChanged: true, savedConfigurationCleared: true });
+    expect(res.body.data).toMatchObject({ headers: [], requestBody: null, bodyContentType: null });
+    expect(await headerRows(monitor.id)).toHaveLength(0);
+    expect(await monitorRow(monitor.id)).toMatchObject({
+      url: 'https://other-api.example.org/health',
+      requestBodyCiphertext: null,
+      requestBodyIv: null,
+      requestBodyAuthTag: null,
+      requestBodyKeyVersion: null,
+      bodyContentType: null,
+    });
+
+    // New credentials for the new destination are stored encrypted again.
+    await alice
+      .patch(`/api/v1/monitors/${monitor.id}/headers`, {
+        upsert: [{ name: 'Authorization', value: 'Bearer new-destination' }],
+      })
+      .expect(200);
+    const [row] = await headerRows(monitor.id);
+    expect(row!.valueCiphertext).not.toContain('new-destination');
+    expect(decryptHeader(row!)).toBe('Bearer new-destination');
+  });
+});
+
 describe('header management', () => {
   // A fresh owner per group keeps each group well under the per-user monitor quota.
   beforeAll(async () => {

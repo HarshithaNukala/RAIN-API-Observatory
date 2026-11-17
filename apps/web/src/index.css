@@ -37,6 +37,10 @@
   * {
     @apply border-border;
   }
+  html {
+    /* Native scrollbars, select menus and date pickers follow the dark theme. */
+    color-scheme: dark;
+  }
   html,
   body,
   #root {

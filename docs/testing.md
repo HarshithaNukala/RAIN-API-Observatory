@@ -31,3 +31,22 @@ Before connecting, `tests/support/database-safety.ts` refuses any URL that:
 
 Supabase's `auth.users` is stubbed in the test database with only the columns the foreign key
 needs.
+
+## UI tests (part of `npm run test`)
+
+Files ending in `.test.tsx` under `apps/web` opt into a jsdom browser environment with
+`// @vitest-environment jsdom`. They render the real route table and components through React
+Testing Library and `user-event`, signed in with a test session, against
+`apps/web/src/test-support/fake-monitor-api.ts`: an in-memory stand-in for the monitor API that
+validates with the same shared schemas and follows the same origin and header rules as the
+server.
+
+These tests prove UI behaviour: forms, validation, credential handling, dialogs, navigation and
+cache refreshes. They do **not** prove the backend. That is the job of the server's unit tests
+(`monitor-service.test.ts` with an in-memory repository) and the database integration suite.
+
+## UI harness (manual, development only)
+
+`npx vite` in `apps/web`, then open `/harness.html?path=/app/monitors`. It renders the signed-in
+screens against the same fake API, with a banner on every screen. It is not included in
+`npm run build`.

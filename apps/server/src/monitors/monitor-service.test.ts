@@ -132,9 +132,13 @@ describe('update', () => {
     );
     const before = { monitor: { ...repo.monitors[0] }, headers: structuredClone(repo.headers) };
 
-    const updated = await svc.update(owner, id, { name: 'Renamed', timeoutMs: 5000 });
+    const { monitor: updated, meta } = await svc.update(owner, id, {
+      name: 'Renamed',
+      timeoutMs: 5000,
+    });
 
     expect(updated).toMatchObject({ name: 'Renamed', timeoutMs: 5000, requestBody: BODY });
+    expect(meta).toEqual({ originChanged: false, savedConfigurationCleared: false });
     expect(repo.monitors[0]).toMatchObject({
       requestBodyCiphertext: before.monitor.requestBodyCiphertext,
       requestBodyIv: before.monitor.requestBodyIv,
@@ -151,7 +155,7 @@ describe('update', () => {
     const oldCiphertext = repo.monitors[0]?.requestBodyCiphertext;
 
     const rotated = service(boxV2());
-    const updated = await rotated.update(owner, id, { name: 'After rotation' });
+    const { monitor: updated } = await rotated.update(owner, id, { name: 'After rotation' });
 
     expect(updated.requestBody).toBe(BODY);
     expect(repo.monitors[0]?.requestBodyKeyVersion).toBe(2);
@@ -179,6 +183,190 @@ describe('update', () => {
     );
     expect(err.details).toEqual([expect.objectContaining({ path: 'requestBody' })]);
     expect(repo.monitors[0]?.method).toBe('POST');
+  });
+});
+
+describe('origin change', () => {
+  const URL_A = 'https://api.example.com/health';
+  // Shapes a URL the way the API's schema stores it.
+  const url = (raw: string) => CreateMonitorSchema.parse({ name: 'x', url: raw }).url;
+
+  async function monitorWithSecrets(svc: MonitorService) {
+    const created = await svc.create(
+      owner,
+      input({
+        url: URL_A,
+        method: 'POST',
+        requestBody: BODY,
+        bodyContentType: 'application/json',
+        headers: [
+          { name: 'Authorization', value: SECRET },
+          { name: 'X-Tenant', value: 'acme' },
+        ],
+      }),
+    );
+    return {
+      id: created.id,
+      snapshot: () => structuredClone({ monitors: repo.monitors, headers: repo.headers }),
+    };
+  }
+
+  it.each([
+    ['a different path', 'https://api.example.com/v2/status'],
+    ['a different query', 'https://api.example.com/health?region=eu'],
+    ['the explicit default port', 'https://api.example.com:443/health'],
+    ['a different hostname case', 'https://API.Example.com/ready'],
+  ])('keeps headers and body when only %s changes', async (_label, next) => {
+    const svc = service();
+    const { id, snapshot } = await monitorWithSecrets(svc);
+    const before = snapshot();
+
+    const { monitor, meta } = await svc.update(owner, id, { url: url(next) });
+
+    expect(meta).toEqual({ originChanged: false, savedConfigurationCleared: false });
+    expect(monitor.headers.map((h) => h.name)).toEqual(['Authorization', 'X-Tenant']);
+    expect(monitor.requestBody).toBe(BODY);
+    expect(repo.headers).toEqual(before.headers);
+  });
+
+  it.each([
+    ['the scheme', 'http://api.example.com/health'],
+    ['the hostname', 'https://other-api.example.org/health'],
+    ['a subdomain', 'https://eu.api.example.com/health'],
+  ])('requires confirmation when %s changes and changes nothing', async (_label, next) => {
+    const svc = service();
+    const { id, snapshot } = await monitorWithSecrets(svc);
+    const before = snapshot();
+
+    const err = await expectAppError(
+      svc.update(owner, id, { url: url(next), name: 'Moved' }),
+      409,
+      'MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED',
+    );
+    expect(err.message).not.toContain(SECRET);
+    expect(err.details).toBeUndefined();
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('treats a port change as an origin change', async () => {
+    // Monitors with custom ports can't be created any more, but rows may predate the policy.
+    const svc = service();
+    const { id } = await monitorWithSecrets(svc);
+    const row = repo.monitors[0]!;
+    row.url = 'https://api.example.com:8443/health';
+    await expectAppError(
+      svc.update(owner, id, { url: url(URL_A) }),
+      409,
+      'MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED',
+    );
+  });
+
+  it('does not ask for confirmation when nothing secret is saved', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input({ url: URL_A }));
+    const { monitor, meta } = await svc.update(owner, id, {
+      url: url('https://other-api.example.org/'),
+    });
+    expect(monitor.url).toBe('https://other-api.example.org/');
+    expect(meta).toEqual({ originChanged: true, savedConfigurationCleared: false });
+  });
+
+  it('on confirmation removes saved headers, body and content type and applies the change', async () => {
+    const svc = service();
+    const { id } = await monitorWithSecrets(svc);
+
+    const { monitor, meta } = await svc.update(owner, id, {
+      url: url('https://other-api.example.org/health'),
+      name: 'Moved',
+      confirmOriginChange: true,
+    });
+
+    expect(meta).toEqual({ originChanged: true, savedConfigurationCleared: true });
+    expect(monitor).toMatchObject({
+      url: 'https://other-api.example.org/health',
+      name: 'Moved',
+      headers: [],
+      requestBody: null,
+      bodyContentType: null,
+    });
+    expect(repo.headers).toHaveLength(0);
+    expect(repo.monitors[0]).toMatchObject({
+      requestBodyCiphertext: null,
+      requestBodyIv: null,
+      requestBodyAuthTag: null,
+      requestBodyKeyVersion: null,
+      bodyContentType: null,
+    });
+  });
+
+  it('accepts a new body sent with the confirmed change, without the old content type', async () => {
+    const svc = service();
+    const { id } = await monitorWithSecrets(svc);
+    const { monitor } = await svc.update(owner, id, {
+      url: url('https://other-api.example.org/'),
+      requestBody: 'fresh=1',
+      confirmOriginChange: true,
+    });
+    expect(monitor.requestBody).toBe('fresh=1');
+    // The old explicit type was cleared with the old body; the default applies to the new one.
+    expect(monitor.bodyContentType).toBe('application/json');
+    expect(repo.monitors[0]?.requestBodyCiphertext).not.toContain('fresh');
+  });
+
+  it('keeps the entire old configuration when the transaction fails part-way', async () => {
+    const svc = service();
+    const { id, snapshot } = await monitorWithSecrets(svc);
+    const before = snapshot();
+    // Fail the final row update, after the headers have already been deleted.
+    const realUpdate = repo.update.bind(repo);
+    repo.update = async () => {
+      throw new Error('connection lost');
+    };
+
+    await expect(
+      svc.update(owner, id, {
+        url: url('https://other-api.example.org/'),
+        confirmOriginChange: true,
+      }),
+    ).rejects.toThrow('connection lost');
+
+    repo.update = realUpdate;
+    expect(snapshot()).toEqual(before);
+    expect((await svc.get(owner, id)).headers).toHaveLength(2);
+  });
+
+  it('encrypts credentials entered again for the new destination', async () => {
+    const svc = service();
+    const { id } = await monitorWithSecrets(svc);
+    await svc.update(owner, id, {
+      url: url('https://other-api.example.org/'),
+      confirmOriginChange: true,
+    });
+
+    const NEW_SECRET = 'Bearer new-destination-token-987';
+    const monitor = await svc.updateHeaders(
+      owner,
+      id,
+      headerUpdate({ upsert: [{ name: 'Authorization', value: NEW_SECRET }] }),
+    );
+
+    expect(monitor.headers).toEqual([
+      { name: 'Authorization', configured: true, updatedAt: expect.any(String) },
+    ]);
+    const [stored] = repo.headers;
+    expect(JSON.stringify(repo.headers)).not.toContain(NEW_SECRET);
+    // Decrypts to the new value with the context of this monitor and header.
+    expect(
+      boxV1().decrypt(
+        {
+          ciphertext: stored!.valueCiphertext,
+          iv: stored!.valueIv,
+          authTag: stored!.valueAuthTag,
+          keyVersion: stored!.encryptionKeyVersion,
+        },
+        `monitor-header:${id}:authorization`,
+      ),
+    ).toBe(NEW_SECRET);
   });
 });
 

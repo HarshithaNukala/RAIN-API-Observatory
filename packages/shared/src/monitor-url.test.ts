@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { findMonitorUrlProblem, normalizeMonitorUrl, sanitizeUrlForLog } from './monitor-url.js';
+import {
+  findMonitorUrlIssue,
+  findMonitorUrlProblem,
+  monitorOrigin,
+  normalizeMonitorUrl,
+  sanitizeUrlForLog,
+} from './monitor-url.js';
 
 describe('findMonitorUrlProblem', () => {
   it.each([
     'https://api.example.com/health',
-    'http://api.example.com:8080/v1/status?region=eu&verbose=1',
+    'http://api.example.com/v1/status?region=eu&verbose=1',
     'https://sub.domain.example.co.uk/',
     'https://8.8.8.8/dns-query',
-    'https://93.184.216.34:8443/',
+    'https://93.184.216.34/',
     'https://[2606:4700:4700::1111]/',
     'https://xn--bcher-kva.example/',
   ])('accepts %s', (url) => {
@@ -122,9 +128,87 @@ describe('findMonitorUrlProblem', () => {
       /at most 2048/,
     );
   });
+});
 
-  it('rejects port 0', () => {
-    expect(findMonitorUrlProblem('http://api.example.com:0/')).toMatch(/Port 0/);
+describe('port policy', () => {
+  it.each([
+    'https://api.example.com/',
+    'https://api.example.com:443/',
+    'http://api.example.com/',
+    'http://api.example.com:80/',
+    'HTTPS://API.EXAMPLE.COM:443/health',
+  ])('accepts the standard port in %s', (url) => {
+    expect(findMonitorUrlIssue(url)).toBeNull();
+  });
+
+  it.each([
+    'https://api.example.com:3000/',
+    'http://api.example.com:8080/',
+    'https://api.example.com:8443/',
+    'https://api.example.com:80/',
+    'http://api.example.com:443/',
+    'http://api.example.com:0/',
+    'https://api.example.com:65535/',
+    'https://93.184.216.34:8443/',
+    'https://[2606:4700:4700::1111]:8443/',
+  ])('rejects the non-standard port in %s with UNSUPPORTED_PORT', (url) => {
+    expect(findMonitorUrlIssue(url)).toEqual({
+      code: 'UNSUPPORTED_PORT',
+      message: expect.stringMatching(/80 for http:\/\/ and 443 for https:\/\//),
+    });
+  });
+
+  it('cannot be bypassed with port-like query parameters or paths', () => {
+    expect(findMonitorUrlIssue('https://api.example.com/:8443?port=8443')).toBeNull();
+    expect(findMonitorUrlIssue('https://api.example.com:8443/?port=443')).toMatchObject({
+      code: 'UNSUPPORTED_PORT',
+    });
+  });
+
+  it('reports private addresses before ports, so the more serious problem is shown', () => {
+    expect(findMonitorUrlIssue('http://localhost:8080/')).toEqual({
+      message: expect.stringMatching(/Local and internal/),
+    });
+  });
+
+  it('accepts an explicitly wider policy for a future administrator allowlist', () => {
+    const policy = { 'http:': [80], 'https:': [443, 8443] } as const;
+    expect(findMonitorUrlIssue('https://api.example.com:8443/', policy)).toBeNull();
+    expect(findMonitorUrlIssue('https://api.example.com:9443/', policy)).toMatchObject({
+      code: 'UNSUPPORTED_PORT',
+    });
+  });
+});
+
+describe('monitorOrigin', () => {
+  it.each([
+    ['https://api.example.com/users', 'https://api.example.com/orders'],
+    ['https://api.example.com/a?x=1', 'https://api.example.com/b?y=2'],
+    ['https://api.example.com/', 'https://api.example.com:443/'],
+    ['http://api.example.com/', 'http://api.example.com:80/'],
+    ['https://API.Example.COM/', 'https://api.example.com/'],
+    ['https://api.example.com./', 'https://api.example.com/'],
+  ])('treats %s and %s as the same origin', (a, b) => {
+    expect(monitorOrigin(a)).toBe(monitorOrigin(b));
+  });
+
+  it.each([
+    ['https://api.example.com', 'https://other-api.com'],
+    ['https://api.example.com', 'http://api.example.com'],
+    ['https://api.example.com', 'https://api.example.com:8443'],
+    ['https://api.example.com', 'https://eu.api.example.com'],
+  ])('treats %s and %s as different origins', (a, b) => {
+    expect(monitorOrigin(a)).not.toBe(monitorOrigin(b));
+  });
+
+  it('spells out the effective port', () => {
+    expect(monitorOrigin('https://api.example.com/x')).toBe('https://api.example.com:443');
+    expect(monitorOrigin('http://api.example.com/x')).toBe('http://api.example.com:80');
+  });
+
+  it('returns null for URLs that cannot be monitored at all', () => {
+    expect(monitorOrigin('not a url')).toBeNull();
+    expect(monitorOrigin('ftp://files.example.com/')).toBeNull();
   });
 });
 

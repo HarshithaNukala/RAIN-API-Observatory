@@ -9,7 +9,11 @@ import { client } from '../test-support/http.js';
 import { stubMonitorService } from '../test-support/monitor-service-stub.js';
 import { TEST_AUDIENCE, TEST_ISSUER, createTestSigner } from '../test-support/tokens.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
-import { monitorNotFound, type MonitorService } from './monitor-service.js';
+import {
+  monitorNotFound,
+  originChangeConfirmationRequired,
+  type MonitorService,
+} from './monitor-service.js';
 
 const userId = randomUUID();
 const monitorId = randomUUID();
@@ -158,14 +162,91 @@ describe('monitor routes', () => {
     expect(ApiErrorSchema.parse(res.body).error.code).toBe('MONITOR_LIMIT_REACHED');
   });
 
-  it('PATCH /monitors/:id passes only the supplied fields', async () => {
-    const update = vi.fn<MonitorService['update']>(async () => monitor);
-    await appWith({ update })
+  it('PATCH /monitors/:id passes only the supplied fields and returns update metadata', async () => {
+    const meta = { originChanged: false, savedConfigurationCleared: false };
+    const update = vi.fn<MonitorService['update']>(async () => ({ monitor, meta }));
+    const res = await appWith({ update })
       .patch(`/api/v1/monitors/${monitorId}`)
       .set('Authorization', auth)
       .send({ checkIntervalSeconds: 600 })
       .expect(200);
     expect(update).toHaveBeenCalledWith(userId, monitorId, { checkIntervalSeconds: 600 });
+    expect(res.body).toEqual({ data: monitor, meta });
+  });
+
+  it('PATCH passes confirmOriginChange through and rejects it as the only field', async () => {
+    const meta = { originChanged: true, savedConfigurationCleared: true };
+    const update = vi.fn<MonitorService['update']>(async () => ({ monitor, meta }));
+    const app = appWith({ update });
+    await app
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ url: 'https://other.example.org/health', confirmOriginChange: true })
+      .expect(200);
+    expect(update).toHaveBeenCalledWith(userId, monitorId, {
+      url: 'https://other.example.org/health',
+      confirmOriginChange: true,
+    });
+
+    const res = await app
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ confirmOriginChange: true })
+      .expect(400);
+    expect(ApiErrorSchema.parse(res.body).error.code).toBe('VALIDATION_ERROR');
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it('maps the origin-change error to a 409 that reveals no secrets', async () => {
+    const update = vi.fn<MonitorService['update']>(async () => {
+      throw originChangeConfirmationRequired();
+    });
+    const res = await appWith({ update })
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ url: 'https://other.example.org/health' })
+      .expect(409);
+    const { error } = ApiErrorSchema.parse(res.body);
+    expect(error.code).toBe('MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED');
+    expect(error.message).toMatch(/saved request headers and request body/);
+    expect(error.details).toBeUndefined();
+  });
+
+  it.each([
+    ['https with a custom port', 'https://api.example.com:8443/health'],
+    ['http with a custom port', 'http://api.example.com:8080/health'],
+    ['https on port 80', 'https://api.example.com:80/health'],
+  ])('rejects %s with UNSUPPORTED_PORT before reaching the service', async (_label, url) => {
+    const create = vi.fn<MonitorService['create']>();
+    const update = vi.fn<MonitorService['update']>();
+    const app = appWith({ create, update });
+
+    for (const req of [
+      app.post('/api/v1/monitors').send({ name: 'Ported', url }),
+      app.patch(`/api/v1/monitors/${monitorId}`).send({ url }),
+    ]) {
+      const res = await req.set('Authorization', auth).expect(400);
+      const { error } = ApiErrorSchema.parse(res.body);
+      expect(error.code).toBe('UNSUPPORTED_PORT');
+      expect(error.details).toEqual([
+        { path: 'url', message: expect.stringMatching(/standard ports/), code: 'UNSUPPORTED_PORT' },
+      ]);
+    }
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('keeps VALIDATION_ERROR as the top-level code when a port problem is not the only one', async () => {
+    const res = await appWith({})
+      .post('/api/v1/monitors')
+      .set('Authorization', auth)
+      .send({ name: '', url: 'https://api.example.com:8443/' })
+      .expect(400);
+    const { error } = ApiErrorSchema.parse(res.body);
+    expect(error.code).toBe('VALIDATION_ERROR');
+    expect(error.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'url', code: 'UNSUPPORTED_PORT' })]),
+    );
   });
 
   it('PATCH /monitors/:id/headers passes explicit upserts and removals', async () => {

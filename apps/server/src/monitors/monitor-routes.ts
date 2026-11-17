@@ -6,6 +6,7 @@ import {
   type DataEnvelope,
   type Monitor,
   type MonitorList,
+  type MonitorUpdateResponse,
 } from '@rain/shared';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
@@ -50,7 +51,9 @@ export function monitorRouter(service: MonitorService): Router {
   router.patch('/monitors/:monitorId', async (req, res) => {
     const id = monitorId(req);
     const patch = UpdateMonitorSchema.parse(req.body);
-    res.json(one(await service.update(currentUser(req).id, id, patch)));
+    const { monitor, meta } = await service.update(currentUser(req).id, id, patch);
+    const body: MonitorUpdateResponse = { data: monitor, meta };
+    res.json(body);
   });
 
   router.patch('/monitors/:monitorId/headers', async (req, res) => {

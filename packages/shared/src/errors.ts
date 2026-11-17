@@ -7,7 +7,10 @@ export const ERROR_CODES = [
   'NOT_FOUND',
   'MONITOR_NOT_FOUND',
   'MONITOR_LIMIT_REACHED',
+  'MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED',
   'CONFLICT',
+  // A 400 whose only problem is a URL with a non-standard port. Details carry the field issue.
+  'UNSUPPORTED_PORT',
   'VALIDATION_ERROR',
   'PAYLOAD_TOO_LARGE',
   'RATE_LIMITED',
@@ -27,3 +30,14 @@ export const ApiErrorSchema = z.object({
   }),
 });
 export type ApiErrorBody = z.infer<typeof ApiErrorSchema>;
+
+/**
+ * One validation problem, addressed to a request field such as `url`. `code` is present when the
+ * problem has a machine-readable identity (for example `UNSUPPORTED_PORT`).
+ */
+export const ApiFieldIssueSchema = z.object({
+  path: z.string(),
+  message: z.string(),
+  code: z.string().optional(),
+});
+export type ApiFieldIssue = z.infer<typeof ApiFieldIssueSchema>;

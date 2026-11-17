@@ -1,15 +1,19 @@
-import { ApiErrorSchema, dataEnvelope, type DataEnvelope, type ErrorCode } from '@rain/shared';
+import {
+  ApiErrorSchema,
+  ApiFieldIssueSchema,
+  dataEnvelope,
+  type ApiFieldIssue,
+  type DataEnvelope,
+  type ErrorCode,
+} from '@rain/shared';
 import { z } from 'zod';
 
 export type ClientErrorCode = ErrorCode | 'NETWORK_ERROR' | 'BAD_RESPONSE';
 
 /** One server-side validation problem, addressed to a request field such as `url`. */
-export interface FieldIssue {
-  path: string;
-  message: string;
-}
+export type FieldIssue = ApiFieldIssue;
 
-const fieldIssues = z.array(z.object({ path: z.string(), message: z.string() }));
+const fieldIssues = z.array(ApiFieldIssueSchema);
 
 export class ApiError extends Error {
   constructor(
@@ -98,6 +102,24 @@ export function createApiClient(options: ApiClientOptions) {
     return (parsed.data as DataEnvelope<z.infer<T>>).data;
   }
 
+  /** Like `request`, but validates and returns the whole body, for responses with metadata. */
+  async function requestBody<T extends z.ZodType>(
+    path: string,
+    schema: T,
+    init: RequestInit,
+  ): Promise<z.infer<T>> {
+    const res = await execute(path, init);
+    const parsed = schema.safeParse(await res.json().catch(() => undefined));
+    if (!parsed.success) {
+      throw new ApiError(
+        res.status,
+        'BAD_RESPONSE',
+        'The API returned data in an unexpected format',
+      );
+    }
+    return parsed.data;
+  }
+
   const withBody = (method: string, body?: unknown): RequestInit =>
     body === undefined ? { method } : { method, body: JSON.stringify(body) };
 
@@ -107,6 +129,9 @@ export function createApiClient(options: ApiClientOptions) {
       request(path, schema, withBody('POST', body)),
     patch: <T extends z.ZodType>(path: string, schema: T, body: unknown) =>
       request(path, schema, withBody('PATCH', body)),
+    /** PATCH whose response is validated as a whole (`{ data, meta }`), not just `data`. */
+    patchWithMeta: <T extends z.ZodType>(path: string, responseSchema: T, body: unknown) =>
+      requestBody(path, responseSchema, withBody('PATCH', body)),
     /** For endpoints that answer 204 No Content. */
     delete: async (path: string): Promise<void> => {
       await execute(path, { method: 'DELETE' });

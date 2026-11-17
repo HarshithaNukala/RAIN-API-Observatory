@@ -1,5 +1,7 @@
-import { Activity, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Activity, ArrowRight, Plus, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Link } from 'react-router';
 import { useMe } from '@/features/account/use-me';
+import { useMonitorList } from '@/features/monitors/api';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -108,18 +110,54 @@ export function OverviewPage() {
         </Card>
       </div>
 
-      <Card className="border-dashed bg-transparent">
-        <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-          <span className="flex size-12 items-center justify-center rounded-full bg-primary/10">
+      <MonitorsSummary />
+    </div>
+  );
+}
+
+/** A count of configured monitors from the API. No health figures until checks exist. */
+function MonitorsSummary() {
+  const list = useMonitorList({
+    search: '',
+    state: 'all',
+    status: undefined,
+    cursor: undefined,
+    limit: 1,
+  });
+  const used = list.data?.quota.used;
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-4 py-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <span className="flex size-11 items-center justify-center rounded-full bg-primary/10">
             <Activity className="size-5 text-primary" aria-hidden />
           </span>
-          <h2 className="text-base font-semibold">No monitors yet</h2>
-          <p className="max-w-md text-sm text-muted-foreground">
-            Monitor management arrives in the next release. Once it does, your APIs, their uptime
-            and any incidents will appear here.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
+          <div>
+            <h2 className="text-base font-semibold">Monitors</h2>
+            <p className="text-sm text-muted-foreground">
+              {list.isPending
+                ? 'Loading…'
+                : list.isError
+                  ? "Couldn't load your monitors."
+                  : used === 0
+                    ? 'No monitors yet. Add the endpoints you want RAIN to watch.'
+                    : `${used} of ${list.data.quota.limit} monitors configured. Health checks start once the monitoring engine is enabled.`}
+            </p>
+          </div>
+        </div>
+        <Button asChild variant={used === 0 ? 'default' : 'outline'}>
+          {used === 0 ? (
+            <Link to="/app/monitors/new">
+              <Plus aria-hidden /> Add monitor
+            </Link>
+          ) : (
+            <Link to="/app/monitors">
+              View monitors <ArrowRight aria-hidden />
+            </Link>
+          )}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
