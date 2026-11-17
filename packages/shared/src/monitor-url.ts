@@ -1,0 +1,168 @@
+/**
+ * Syntax-level safety checks for a monitor's target URL. They run identically in the browser
+ * form and in the API.
+ *
+ * This is NOT full SSRF protection: a public hostname can still resolve to a private address.
+ * Resolving DNS and validating the address at connect time is the monitoring executor's job.
+ */
+
+export const MAX_MONITOR_URL_LENGTH = 2048;
+
+/** Query parameters that conventionally carry credentials. Secrets belong in encrypted headers. */
+const CREDENTIAL_QUERY_PARAMS = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
+  'api-key',
+  'auth',
+  'authorization',
+  'bearer',
+  'client_secret',
+  'jwt',
+  'key',
+  'passwd',
+  'password',
+  'private_key',
+  'pwd',
+  'secret',
+  'sig',
+  'signature',
+  'token',
+]);
+
+const LOCAL_SUFFIXES = [
+  'localhost',
+  'local',
+  'localdomain',
+  'internal',
+  'intranet',
+  'lan',
+  'home',
+  'corp',
+  'home.arpa',
+];
+
+const PRIVATE_ADDRESS = "Private, loopback and reserved IP addresses can't be monitored";
+
+function isForbiddenIpv4(o: readonly number[]): boolean {
+  const [a = 0, b = 0, c = 0] = o;
+  return (
+    a === 0 || // "this network"
+    a === 10 ||
+    (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+    a === 127 ||
+    (a === 169 && b === 254) || // link-local, cloud metadata
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 0 && c === 2) || // TEST-NET-1
+    (a === 192 && b === 88 && c === 99) || // 6to4 relay
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
+    (a === 198 && b === 51 && c === 100) || // TEST-NET-2
+    (a === 203 && b === 0 && c === 113) || // TEST-NET-3
+    a >= 224 // multicast, reserved, broadcast
+  );
+}
+
+/** Expands a WHATWG-serialised IPv6 address (no brackets) into its eight 16-bit groups. */
+function expandIpv6(address: string): number[] | null {
+  const [head = '', tail, ...rest] = address.split('::');
+  if (rest.length > 0) return null;
+  const parse = (part: string) => (part === '' ? [] : part.split(':').map((h) => parseInt(h, 16)));
+  const left = parse(head);
+  const right = tail === undefined ? [] : parse(tail);
+  const missing = 8 - left.length - right.length;
+  if (tail === undefined ? missing !== 0 : missing < 1) return null;
+  const groups = [...left, ...Array<number>(Math.max(missing, 0)).fill(0), ...right];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff)
+    ? groups
+    : null;
+}
+
+function isForbiddenIpv6(g: readonly number[]): boolean {
+  const [g0 = 0, g1 = 0] = g;
+  const leadingZeros = (n: number) => g.slice(0, n).every((x) => x === 0);
+  return (
+    leadingZeros(6) || // ::, ::1 and deprecated IPv4-compatible ::a.b.c.d
+    (leadingZeros(5) && g[5] === 0xffff) || // IPv4-mapped: use the IPv4 address itself
+    (g0 === 0x64 && g1 === 0xff9b) || // NAT64, can embed a private IPv4 address
+    (g0 === 0x100 && g1 === 0 && g[2] === 0 && g[3] === 0) || // discard-only 100::/64
+    (g0 === 0x2001 && g1 === 0) || // Teredo
+    (g0 === 0x2001 && g1 === 0xdb8) || // documentation
+    g0 === 0x2002 || // 6to4, can embed a private IPv4 address
+    (g0 & 0xfe00) === 0xfc00 || // unique local
+    (g0 & 0xffc0) === 0xfe80 || // link-local
+    (g0 & 0xffc0) === 0xfec0 || // site-local (deprecated)
+    (g0 & 0xff00) === 0xff00 // multicast
+  );
+}
+
+function findHostProblem(hostname: string): string | null {
+  if (hostname.startsWith('[')) {
+    const groups = expandIpv6(hostname.slice(1, -1));
+    return !groups || isForbiddenIpv6(groups) ? PRIVATE_ADDRESS : null;
+  }
+  // The URL parser has already normalised hex, octal and integer IPv4 forms to dotted decimal.
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    return isForbiddenIpv4(hostname.split('.').map(Number)) ? PRIVATE_ADDRESS : null;
+  }
+  const host = hostname.replace(/\.$/, '').toLowerCase();
+  if (LOCAL_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`))) {
+    return "Local and internal hostnames can't be monitored";
+  }
+  if (!host.includes('.')) {
+    return 'Use a public hostname with a domain, such as api.example.com';
+  }
+  return null;
+}
+
+/** Returns a user-facing reason the URL can't be monitored, or null when it is acceptable. */
+export function findMonitorUrlProblem(raw: string): string | null {
+  if (raw.length > MAX_MONITOR_URL_LENGTH) {
+    return `URL must be at most ${MAX_MONITOR_URL_LENGTH} characters`;
+  }
+  // Matching control characters is the point here: they are rejected before URL parsing.
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\u0000-\u001f\u007f]/.test(raw)) {
+    return 'URL must not contain spaces or control characters';
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return 'Enter a valid URL, such as https://api.example.com/health';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return 'Only http:// and https:// URLs can be monitored';
+  }
+  if (url.username || url.password) {
+    return 'Remove the username and password from the URL and use a header instead';
+  }
+  if (!url.hostname) return 'Enter a valid URL, such as https://api.example.com/health';
+  if (url.port === '0') return 'Port 0 is not a valid port';
+  const hostProblem = findHostProblem(url.hostname);
+  if (hostProblem) return hostProblem;
+  for (const name of url.searchParams.keys()) {
+    if (CREDENTIAL_QUERY_PARAMS.has(name.toLowerCase())) {
+      return `Don't put credentials in the URL ("${name}"). Add them as a header instead; header values are encrypted`;
+    }
+  }
+  return null;
+}
+
+/** Canonical form stored for a valid URL: parser-normalised, without the fragment. */
+export function normalizeMonitorUrl(raw: string): string {
+  const url = new URL(raw);
+  url.hash = '';
+  return url.href;
+}
+
+/** Origin and path only, for logs and error messages. Never includes query strings or userinfo. */
+export function sanitizeUrlForLog(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return '[invalid URL]';
+  }
+}

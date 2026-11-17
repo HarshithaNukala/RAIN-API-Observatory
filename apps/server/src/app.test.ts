@@ -13,6 +13,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp, type AppDependencies } from './app.js';
 import { createTokenVerifier } from './auth/verify-token.js';
 import type { ProfileStore } from './db/profiles.js';
+import { stubMonitorService } from './test-support/monitor-service-stub.js';
 import { TEST_AUDIENCE, TEST_ISSUER, createTestSigner } from './test-support/tokens.js';
 
 /** In-memory stand-in for the Postgres-backed store; the real one is covered by integration tests. */
@@ -49,6 +50,7 @@ function buildApp(overrides: Partial<AppDependencies> = {}) {
       jwks: signer.jwks,
     }),
     profiles,
+    monitors: stubMonitorService(),
     readiness: async () => ({ database: 'ok', auth: 'ok' }),
     ...overrides,
   });
@@ -156,7 +158,7 @@ describe('cross-cutting behaviour', () => {
     const res = await client(buildApp().app)
       .post('/api/v1/me')
       .set('Content-Type', 'application/json')
-      .send(JSON.stringify({ blob: 'x'.repeat(150 * 1024) }))
+      .send(JSON.stringify({ blob: 'x'.repeat(300 * 1024) }))
       .expect(413);
     expectErrorBody(res.body, 'PAYLOAD_TOO_LARGE');
   });

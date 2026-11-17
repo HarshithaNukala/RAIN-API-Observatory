@@ -2,10 +2,13 @@ import { createRemoteJWKSet } from 'jose';
 import { createApp } from './app.js';
 import { createTokenVerifier } from './auth/verify-token.js';
 import { ConfigError, loadServerConfig, type ServerConfig } from './config.js';
+import { createSecretBox } from './crypto/secret-box.js';
 import { createDatabase } from './db/client.js';
 import { createProfileStore } from './db/profiles.js';
 import { loadDotEnv } from './env-file.js';
 import { createLogger } from './logger.js';
+import { createMonitorRepository } from './monitors/monitor-repository.js';
+import { createMonitorService } from './monitors/monitor-service.js';
 
 loadDotEnv();
 
@@ -32,6 +35,8 @@ const jwks = createRemoteJWKSet(new URL(config.auth.jwksUrl), {
   cacheMaxAge: 10 * 60_000,
 });
 
+const profiles = createProfileStore(database.db);
+
 const app = createApp({
   logger,
   corsOrigins: config.corsOrigins,
@@ -42,7 +47,13 @@ const app = createApp({
     jwks,
     legacyHs256Secret: config.auth.legacyHs256Secret,
   }),
-  profiles: createProfileStore(database.db),
+  profiles,
+  monitors: createMonitorService({
+    repository: createMonitorRepository(database.db),
+    profiles,
+    secretBox: createSecretBox(config.encryption),
+    maxMonitorsPerUser: config.maxMonitorsPerUser,
+  }),
   readiness: async () => {
     const [db, auth] = await Promise.allSettled([
       database.ping(),

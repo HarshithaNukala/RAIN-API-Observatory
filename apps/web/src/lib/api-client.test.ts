@@ -103,3 +103,81 @@ describe('createApiClient', () => {
     });
   });
 });
+
+describe('createApiClient write methods', () => {
+  const sent = (call: unknown[] | undefined) => {
+    const init = call?.[1] as RequestInit;
+    return {
+      method: init.method,
+      body: init.body,
+      contentType: new Headers(init.headers).get('Content-Type'),
+    };
+  };
+
+  it('POST sends a JSON body and unwraps the response', async () => {
+    const { api, fetch } = setup([json(201, { data: me })]);
+    await expect(api.post('/api/v1/things', MeSchema, { name: 'x' })).resolves.toEqual(me);
+    expect(sent(fetch.mock.calls[0])).toEqual({
+      method: 'POST',
+      body: '{"name":"x"}',
+      contentType: 'application/json',
+    });
+  });
+
+  it('POST without a body sends no body or Content-Type', async () => {
+    const { api, fetch } = setup([json(200, { data: me })]);
+    await api.post('/api/v1/things/1/pause', MeSchema);
+    expect(sent(fetch.mock.calls[0])).toEqual({
+      method: 'POST',
+      body: undefined,
+      contentType: null,
+    });
+  });
+
+  it('PATCH sends the patch as JSON', async () => {
+    const { api, fetch } = setup([json(200, { data: me })]);
+    await api.patch('/api/v1/things/1', MeSchema, { name: 'y' });
+    expect(sent(fetch.mock.calls[0])).toMatchObject({ method: 'PATCH', body: '{"name":"y"}' });
+  });
+
+  it('DELETE resolves on 204 without reading a body', async () => {
+    const { api, fetch } = setup([new Response(null, { status: 204 })]);
+    await expect(api.delete('/api/v1/things/1')).resolves.toBeUndefined();
+    expect(sent(fetch.mock.calls[0]).method).toBe('DELETE');
+  });
+
+  it('DELETE refreshes once after a 401 like reads do', async () => {
+    const unauth = { error: { code: 'TOKEN_EXPIRED', message: 'expired' } };
+    const { api, fetch } = setup([json(401, unauth), new Response(null, { status: 204 })]);
+    await api.delete('/api/v1/things/1');
+    expect(authHeader(fetch.mock.calls[1])).toBe('Bearer token-2');
+  });
+
+  it('exposes field-level issues from VALIDATION_ERROR responses', async () => {
+    const body = {
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Request validation failed',
+        requestId: 'r4',
+        details: [{ path: 'url', message: 'Enter a valid URL' }],
+      },
+    };
+    const { api } = setup([json(400, body)]);
+    const err = await api.post('/api/v1/things', MeSchema, {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      issues: [{ path: 'url', message: 'Enter a valid URL' }],
+    });
+  });
+
+  it('ignores details that are not field issues', async () => {
+    const body = { error: { code: 'CONFLICT', message: 'conflict', details: { other: true } } };
+    const { api } = setup([json(409, body)]);
+    await expect(api.delete('/api/v1/things/1')).rejects.toMatchObject({
+      code: 'CONFLICT',
+      issues: [],
+    });
+  });
+});

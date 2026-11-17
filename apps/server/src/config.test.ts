@@ -1,11 +1,15 @@
+import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadServerConfig, loadWorkerConfig } from './config.js';
 
 const SECRET_DB_URL = 'postgresql://app:sup3r-s3cret@localhost:5432/rain_dev';
 
+const KEY = randomBytes(32).toString('base64');
+
 const validEnv = {
   DATABASE_URL: SECRET_DB_URL,
   SUPABASE_URL: 'https://abc123.supabase.co/',
+  ENCRYPTION_KEY: KEY,
 };
 
 function problemsOf(fn: () => unknown): string[] {
@@ -106,6 +110,72 @@ describe('loadServerConfig', () => {
     expect(
       loadServerConfig({ ...validEnv, SUPABASE_URL: 'http://127.0.0.1:54321' }).auth.issuer,
     ).toBe('http://127.0.0.1:54321/auth/v1');
+  });
+});
+
+describe('loadServerConfig encryption and limits', () => {
+  it('requires ENCRYPTION_KEY and never generates one', () => {
+    const { ENCRYPTION_KEY: _omitted, ...withoutKey } = validEnv;
+    expect(problemsOf(() => loadServerConfig(withoutKey)).join(' ')).toMatch(/ENCRYPTION_KEY/);
+  });
+
+  it('loads the current key as version 1 by default', () => {
+    const { encryption } = loadServerConfig(validEnv);
+    expect(encryption.currentVersion).toBe(1);
+    expect(encryption.keys.get(1)).toEqual(Buffer.from(KEY, 'base64'));
+  });
+
+  it.each([
+    ['too short', randomBytes(16).toString('base64')],
+    ['not base64', 'this is definitely not a key!!'],
+    ['all zeros', Buffer.alloc(32).toString('base64')],
+  ])('rejects a key that is %s without echoing it', (_label, bad) => {
+    const err = (() => {
+      try {
+        loadServerConfig({ ...validEnv, ENCRYPTION_KEY: bad });
+      } catch (e) {
+        return e as Error;
+      }
+      throw new Error('expected failure');
+    })();
+    expect(err.message).toMatch(/ENCRYPTION_KEY/);
+    expect(err.message).not.toContain(bad);
+  });
+
+  it('loads retired keys for rotation', () => {
+    const old = randomBytes(32).toString('base64');
+    const { encryption } = loadServerConfig({
+      ...validEnv,
+      ENCRYPTION_KEY_VERSION: '2',
+      ENCRYPTION_PREVIOUS_KEYS: `1:${old}`,
+    });
+    expect(encryption.currentVersion).toBe(2);
+    expect([...encryption.keys.keys()].sort()).toEqual([1, 2]);
+    expect(encryption.keys.get(1)).toEqual(Buffer.from(old, 'base64'));
+  });
+
+  it('rejects a retired key that reuses the current version', () => {
+    const problems = problemsOf(() =>
+      loadServerConfig({ ...validEnv, ENCRYPTION_PREVIOUS_KEYS: `1:${KEY}` }),
+    );
+    expect(problems[0]).toMatch(/duplicate key version 1/);
+  });
+
+  it('rejects malformed retired-key entries', () => {
+    const problems = problemsOf(() =>
+      loadServerConfig({ ...validEnv, ENCRYPTION_PREVIOUS_KEYS: 'just-a-key' }),
+    );
+    expect(problems[0]).toMatch(/ENCRYPTION_PREVIOUS_KEYS/);
+  });
+
+  it('defaults the monitor quota to 25 and allows overriding it', () => {
+    expect(loadServerConfig(validEnv).maxMonitorsPerUser).toBe(25);
+    expect(loadServerConfig({ ...validEnv, MAX_MONITORS_PER_USER: '5' }).maxMonitorsPerUser).toBe(
+      5,
+    );
+    expect(
+      problemsOf(() => loadServerConfig({ ...validEnv, MAX_MONITORS_PER_USER: '0' }))[0],
+    ).toMatch(/MAX_MONITORS_PER_USER/);
   });
 });
 

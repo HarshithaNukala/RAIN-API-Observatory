@@ -39,6 +39,8 @@ Prerequisites: Node.js 26 and npm 11. Docker is only needed for `npm run test:in
 ```bash
 npm install
 cp .env.example .env    # then fill it in — see docs/supabase-setup.md
+# ENCRYPTION_KEY is required; generate one and paste it into .env:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 npm run db:migrate
 npm run dev
 ```
@@ -83,7 +85,7 @@ Every response carries an `X-Request-Id` header.
 | `GET /api/v1/me` | Bearer | The signed-in user and their profile (created on first call)      |
 
 `/api` routes return `401` for a missing, malformed, invalid or expired token (`TOKEN_EXPIRED`).
-Requests are rate-limited per client IP (120/min) and bodies are capped at 100 kB.
+Requests are rate-limited per client IP (120/min) and bodies are capped at 256 kB.
 
 ## Security notes
 
@@ -92,7 +94,25 @@ Requests are rate-limited per client IP (120/min) and bodies are capped at 100 k
 - The API verifies Supabase access tokens locally with `jose`: JWKS for asymmetric keys, and the
   optional legacy HS256 secret for older projects. Anon and service-role tokens are rejected.
 - Pino redacts `Authorization`, cookies and secret-looking fields from logs.
-- `profiles` has Row Level Security enabled with no policies, so only the API can access it.
+- `profiles`, `monitors` and `monitor_headers` have Row Level Security enabled with no policies,
+  so only the API can access them.
+- Monitor header values and request bodies are encrypted at rest with AES-256-GCM using
+  `ENCRYPTION_KEY`. Header values are write-only: no API response returns them.
+
+## Encryption keys
+
+`ENCRYPTION_KEY` is a base64-encoded random 32-byte key; the API refuses to start without a valid
+one. Back it up — encrypted values cannot be recovered without it.
+
+To rotate: move the current key into `ENCRYPTION_PREVIOUS_KEYS` as `<version>:<key>`, put a new key
+in `ENCRYPTION_KEY`, and increase `ENCRYPTION_KEY_VERSION`. New writes use the new key, and a
+request body sealed with an older key is re-encrypted with the current key the next time its
+monitor is edited. Header values move to the new key when they are next replaced. Keep a retired
+key configured until no stored value uses its version
+(`select distinct request_body_key_version from monitors` and
+`select distinct encryption_key_version from monitor_headers`); removing it earlier makes those
+values unreadable.
+
 - Integration tests refuse to run against anything but a local or disposable `*_test` database,
   and never against the legacy `rain_db`.
 

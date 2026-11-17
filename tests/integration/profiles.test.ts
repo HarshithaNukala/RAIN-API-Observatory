@@ -10,6 +10,7 @@ import { createProfileStore } from '../../apps/server/src/db/profiles.js';
 import { profiles } from '../../apps/server/src/db/schema.js';
 import { AppError } from '../../apps/server/src/errors.js';
 import { client } from '../../apps/server/src/test-support/http.js';
+import { stubMonitorService } from '../../apps/server/src/test-support/monitor-service-stub.js';
 import {
   TEST_AUDIENCE,
   TEST_ISSUER,
@@ -90,6 +91,7 @@ describe('API against the real database', () => {
         jwks: signer.jwks,
       }),
       profiles: store,
+      monitors: stubMonitorService(),
       readiness: async () => {
         await database.ping();
         return { database: 'ok', auth: 'ok' };

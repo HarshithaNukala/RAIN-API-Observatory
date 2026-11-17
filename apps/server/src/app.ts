@@ -10,6 +10,8 @@ import type { ProfileStore } from './db/profiles.js';
 import { AppError } from './errors.js';
 import { errorHandler, notFoundHandler } from './http/error-handler.js';
 import { genRequestId } from './http/request-id.js';
+import { monitorRouter } from './monitors/monitor-routes.js';
+import type { MonitorService } from './monitors/monitor-service.js';
 import { healthRouter, type ReadinessProbe } from './routes/health.js';
 import { meRouter } from './routes/me.js';
 
@@ -19,12 +21,14 @@ export interface AppDependencies {
   trustProxy: number;
   verifyAccessToken: VerifyAccessToken;
   profiles: ProfileStore;
+  monitors: MonitorService;
   readiness: ReadinessProbe;
   /** Requests per minute per client IP on /api. */
   rateLimitPerMinute?: number;
 }
 
-export const BODY_LIMIT = '100kb';
+// Room for a 64 KB request body plus the maximum set of headers, JSON-encoded.
+export const BODY_LIMIT = '256kb';
 
 export function createApp(deps: AppDependencies): Express {
   const app = express();
@@ -68,7 +72,13 @@ export function createApp(deps: AppDependencies): Express {
     }),
   );
   api.use(requireAuth(deps.verifyAccessToken));
+  // Responses are per-user and may include request bodies; never let a cache keep them.
+  api.use((_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   api.use('/v1', meRouter(deps.profiles));
+  api.use('/v1', monitorRouter(deps.monitors));
   app.use('/api', api);
 
   app.use(notFoundHandler);

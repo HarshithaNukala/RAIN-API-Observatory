@@ -19,6 +19,16 @@ Copy `.env.example` to `.env` at the repository root, then fill in:
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Project Settings → API Keys → publishable key (`sb_publishable_…`) or legacy anon | Yes                 |
 | `DATABASE_URL`                  | **Connect** → Session pooler URI. Keep `?sslmode=require`                         | No (server)         |
 | `SUPABASE_JWT_SECRET`           | Only for legacy HS256 signing — see step 3                                        | No (server)         |
+| `ENCRYPTION_KEY`                | Not from Supabase: generate locally (command below). Required                     | No (server)         |
+
+Generate `ENCRYPTION_KEY` (a random 32-byte key, base64) and keep a backup of it:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+`ENCRYPTION_KEY_VERSION`, `ENCRYPTION_PREVIOUS_KEYS` and `MAX_MONITORS_PER_USER` can keep their
+defaults; see the README's "Encryption keys" section for rotation.
 
 Never put the `sb_secret_…` / `service_role` key in any `VITE_*` variable. The web app refuses to
 start if it detects one there, because everything in `VITE_*` is shipped to every visitor.
