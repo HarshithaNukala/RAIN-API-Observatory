@@ -1,70 +1,219 @@
-# RAIN — API Reliability Observatory
+<p align="center">
+  <img src="frontend/public/favicon.svg" alt="RAIN Logo" width="80" />
+</p>
 
-**"Know your APIs before your users do."**
+<h1 align="center">RAIN — API Reliability Observatory</h1>
 
-RAIN is a third-party API reliability monitoring platform. It allows developers to register external APIs, configure monitoring schedules, perform automated health checks, measure uptime, and track incidents.
+<p align="center">
+  <strong>Know your APIs before your users do.</strong>
+</p>
 
-## Current Phase: Phase 5 (Incident Engine)
-This project is being developed phase-by-phase. We have completed Phase 5, which introduces the Incident Engine to convert continuous API failures into meaningful incidents using pessimistic locking for safe concurrent lifecycle management.
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#tech-stack">Tech Stack</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#api-reference">API Reference</a> •
+  <a href="#contributing">Contributing</a> •
+  <a href="#license">License</a>
+</p>
 
-## Problem Statement
-Third-party APIs frequently fail, change, or degrade in performance. Developers often discover these issues only when their users report them. RAIN provides an observatory to monitor external API reliability proactively.
+---
 
-## Technology Stack
-- **Frontend**: React, TypeScript, Vite, React Router, TanStack Query, Recharts, Tailwind CSS
-- **Backend**: Java 21, Spring Boot 3.x, Spring MVC, Spring Data JPA, Spring WebClient (for future monitoring calls)
-- **Database**: PostgreSQL, Flyway
-- **Infrastructure**: Docker, Docker Compose
+RAIN is a **third-party API reliability monitoring platform** that lets development teams register external APIs, run automated health checks, measure uptime, track latency trends, detect incidents, and surface anomalies — all from a single observatory dashboard.
 
-## Prerequisites
-- Java 21 & Javac 21
-- Node.js 22.x & npm 10.x
-- Docker & Docker Compose
-- Git
+## Features
 
-## Project Structure
-- `/frontend`: React application
-- `/backend`: Spring Boot application
-- `/docs`: Documentation
-- `/infra`: Infrastructure configuration
-- `/scripts`: Utility scripts
+| Capability | Description |
+|---|---|
+| **API Registry** | Register, edit, pause, and manage external API endpoints with custom headers and HTTP methods |
+| **Monitoring Engine** | Scheduled health checks with configurable intervals and SSRF-hardened request execution |
+| **Telemetry & Metrics** | Uptime percentage, average/P95 latency, success/failure ratios with time-window bucketing |
+| **Incident Engine** | Automatic incident detection from consecutive failures with pessimistic-lock concurrency safety |
+| **Intelligence Engine** | Anomaly detection, error-type classification, and reliability scoring |
+| **Observatory Dashboard** | Real-time overview with latency charts, success/failure trends, incident feed, and intelligence panels |
 
-## Environment Setup
-1. Copy `.env.example` to `.env` in the root folder.
-2. Fill in the values (the defaults in `.env.example` are suitable for local development).
+## Tech Stack
 
-## PostgreSQL Setup
-Run the following command from the project root:
+| Layer | Technologies |
+|---|---|
+| **Frontend** | React 19, TypeScript, Vite, React Router 7, TanStack Query, Recharts, Tailwind CSS, Lucide Icons |
+| **Backend** | Java 21, Spring Boot 3.x, Spring MVC, Spring Data JPA, Spring WebClient, Spring Scheduling |
+| **Database** | PostgreSQL 15, Flyway Migrations |
+| **Infrastructure** | Docker, Docker Compose |
+
+## Quick Start
+
+### Prerequisites
+
+- **Java** 21+
+- **Node.js** 22+ & npm 10+
+- **Docker** & Docker Compose
+- **Git**
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/HarshithaNukala/RAIN-API-Observatory.git
+cd RAIN-API-Observatory
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+# The defaults are ready for local development — adjust if needed
+```
+
+### 3. Start the database
+
 ```bash
 docker compose up -d
 ```
-This will start a PostgreSQL instance on port 5432.
 
-## Backend Startup
-Navigate to the `backend` directory:
+PostgreSQL will be available on port `5432`. The healthcheck ensures it's ready before you proceed.
+
+### 4. Start the backend
+
 ```bash
 cd backend
-./mvnw spring-boot:run
+./mvnw spring-boot:run      # Linux / macOS
+mvnw.cmd spring-boot:run    # Windows
 ```
-The backend will start on port 8080. Flyway will automatically run database migrations.
 
-## Frontend Startup
-Navigate to the `frontend` directory:
+The API server starts on **http://localhost:8080**. Flyway runs all migrations automatically.
+
+### 5. Start the frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-The frontend will start on port 5173.
 
-## Health Endpoint
-Test the backend is running by accessing:
-```
-GET http://localhost:8080/api/health
+The dashboard opens on **http://localhost:5173**.
+
+### 6. Verify
+
+```bash
+curl http://localhost:8080/api/health
+# → {"status":"UP","timestamp":"..."}
 ```
 
-## Future Phases
-- Analytics and dashboarding (Phase 6)
-- Real-time updates and notifications
-- Analytics and dashboarding
-- Authentication and authorization
+## Architecture
+
+RAIN follows a **Modular Monolith** architecture — strict domain separation (Registry, Monitoring, Telemetry, Incidents, Intelligence) within a single deployable unit backed by one PostgreSQL database.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   React Frontend                     │
+│  Dashboard · Registry · API Details · Add API        │
+└──────────────────────┬──────────────────────────────┘
+                       │  REST / JSON
+┌──────────────────────▼──────────────────────────────┐
+│                 Spring Boot Backend                  │
+│  ┌──────────┐ ┌───────────┐ ┌───────────────────┐   │
+│  │ Registry │ │ Monitoring│ │ Telemetry/Metrics │   │
+│  └──────────┘ └───────────┘ └───────────────────┘   │
+│  ┌──────────┐ ┌──────────────────────────────────┐   │
+│  │ Incidents│ │      Intelligence Engine         │   │
+│  └──────────┘ └──────────────────────────────────┘   │
+└──────────────────────┬──────────────────────────────┘
+                       │  JDBC / JPA
+┌──────────────────────▼──────────────────────────────┐
+│          PostgreSQL 15 (Flyway-managed)              │
+│  api_services · health_checks · incidents            │
+└─────────────────────────────────────────────────────┘
+```
+
+> See [ARCHITECTURE.md](ARCHITECTURE.md) for in-depth design decisions, concurrency strategies, and telemetry formulas.
+
+## Project Structure
+
+```
+RAIN-API-Observatory/
+├── backend/
+│   └── src/main/java/com/rain/
+│       ├── config/            # WebClient, CORS configuration
+│       ├── controller/        # REST controllers
+│       ├── dto/               # Request/response DTOs
+│       ├── entity/            # JPA entities & enums
+│       ├── exception/         # Global error handling
+│       ├── intelligence/      # Anomaly detection & scoring
+│       ├── monitoring/        # Health checks, scheduler, SSRF guard
+│       ├── repository/        # Spring Data repositories
+│       └── service/           # Business logic
+├── frontend/src/
+│   ├── components/            # Reusable UI components
+│   ├── pages/                 # Route-level page components
+│   ├── services/              # API client & React Query hooks
+│   └── types/                 # TypeScript type definitions
+├── docs/                      # Additional documentation
+├── infra/                     # Infrastructure configs
+├── scripts/                   # Utility scripts
+├── docker-compose.yml         # PostgreSQL service
+├── ARCHITECTURE.md            # Design & architecture docs
+└── .env.example               # Environment variable template
+```
+
+## API Reference
+
+### Health
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Application health check |
+
+### API Registry
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/services` | List all registered APIs |
+| `GET` | `/api/services/{id}` | Get API details |
+| `POST` | `/api/services` | Register a new API |
+| `PUT` | `/api/services/{id}` | Update an API |
+| `PATCH` | `/api/services/{id}/pause` | Pause monitoring |
+| `PATCH` | `/api/services/{id}/resume` | Resume monitoring |
+| `DELETE` | `/api/services/{id}` | Remove an API |
+
+### Metrics & Telemetry
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/metrics/dashboard` | Dashboard summary stats |
+| `GET` | `/api/metrics/services/{id}` | Per-API uptime, latency, P95 |
+| `GET` | `/api/metrics/services/{id}/latency-series` | Latency time series |
+| `GET` | `/api/metrics/services/{id}/success-failure-series` | Success/failure time series |
+
+### Incidents
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/incidents` | List all incidents |
+| `GET` | `/api/incidents/api/{apiId}` | Incidents for a specific API |
+
+### Intelligence
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/intelligence/services/{id}` | Anomaly detection & reliability analysis |
+
+## Database Migrations
+
+Flyway migrations are located in `backend/src/main/resources/db/migration/`:
+
+| Version | Description |
+|---|---|
+| `V1` | Initial schema setup |
+| `V2` | API registry tables |
+| `V3` | Monitoring engine schema |
+| `V4` | Telemetry & metrics indexes |
+| `V5` | Incident engine schema |
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
