@@ -146,6 +146,9 @@ values unreadable.
 
 ## More
 
+- [Product requirements (PRD)](docs/PRD.md)
+- [High-level design (HLD)](docs/HLD.md)
+- [Low-level design (LLD)](docs/LLD.md)
 - [Supabase setup](docs/supabase-setup.md)
 - [Testing](docs/testing.md)
 - [Deployment](docs/deployment.md)
