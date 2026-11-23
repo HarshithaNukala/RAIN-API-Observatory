@@ -1,4 +1,10 @@
-import { MONITOR_LIMITS, type MonitorStatus } from '@rain/shared';
+import {
+  MONITOR_LIMITS,
+  type CheckFailureReason,
+  type MonitorCheckOutcome,
+  type MonitorCheckSource,
+  type MonitorStatus,
+} from '@rain/shared';
 
 export const STATUS_LABELS: Record<MonitorStatus, string> = {
   UNKNOWN: 'Unknown',
@@ -55,3 +61,25 @@ export function formatBytes(bytes: number): string {
 }
 
 export const REQUEST_BODY_MAX_BYTES = MONITOR_LIMITS.requestBodyMaxBytes;
+
+export const OUTCOME_LABELS: Record<MonitorCheckOutcome, string> = {
+  SUCCESS: 'Success',
+  DEGRADED: 'Slow',
+  FAILURE: 'Failed',
+};
+
+export const FAILURE_REASON_LABELS: Record<CheckFailureReason, string> = {
+  UNEXPECTED_STATUS: 'Unexpected status',
+  TIMEOUT: 'Timed out',
+  DNS_ERROR: 'DNS lookup failed',
+  CONNECTION_ERROR: 'Connection failed',
+  TLS_ERROR: 'TLS error',
+  BLOCKED_DESTINATION: 'Destination not allowed',
+  REQUEST_ERROR: 'Request failed',
+  CONFIGURATION_ERROR: 'Not sent (configuration)',
+};
+
+export const SOURCE_LABELS: Record<MonitorCheckSource, string> = {
+  SCHEDULED: 'Scheduled',
+  MANUAL: 'Manual',
+};

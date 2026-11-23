@@ -2,8 +2,8 @@
 
 A **monitor** is the configuration of one API endpoint RAIN will check: where to send the request,
 how, how often, and what counts as healthy. This module stores and manages that configuration.
-It does **not** run checks: the monitoring engine is a later phase, so every monitor's status
-stays `UNKNOWN` until a real check records one.
+It does not run checks itself: the worker does (see [monitoring-engine.md](monitoring-engine.md)).
+A monitor's status stays `UNKNOWN` until a real check records one.
 
 Contracts live in `packages/shared/src/monitor*.ts` and are used by both the API and the web app.
 
@@ -27,19 +27,20 @@ the same `404 MONITOR_NOT_FOUND`, so IDs can't be probed. Every `/api` response 
 
 ### Fields
 
-| Field                   | Rules                                                                                                                                                                             | Default  |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `name`                  | 1–100 chars, trimmed                                                                                                                                                              | required |
-| `description`           | ≤ 500 chars; empty → `null`                                                                                                                                                       | `null`   |
-| `url`                   | see [URL rules](#url-rules)                                                                                                                                                       | required |
-| `method`                | `GET` `HEAD` `OPTIONS` `POST` `PUT` `PATCH`                                                                                                                                       | `GET`    |
-| `expectedStatusCode`    | 100–599                                                                                                                                                                           | 200      |
-| `timeoutMs`             | 1000–30000                                                                                                                                                                        | 10000    |
-| `latencyThresholdMs`    | 1–30000, ≤ `timeoutMs`                                                                                                                                                            | 2000     |
-| `checkIntervalSeconds`  | 60–86400                                                                                                                                                                          | 300      |
-| `requestBody`           | ≤ 64 KB UTF-8; POST/PUT/PATCH only; encrypted at rest                                                                                                                             | `null`   |
-| `bodyContentType`       | media type; only with a body; `application/json` when omitted                                                                                                                     | `null`   |
-| `headers` (create only) | ≤ 20; RFC 9110 names; no CR/LF/NUL in values; ≤ 4096 chars each; ≤ 32 KB total; connection-level names (`Host`, `Content-Length`, `Transfer-Encoding`, `Content-Type`, …) refused | `[]`     |
+| Field                   | Rules                                                                                                                                                                                   | Default  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `name`                  | 1–100 chars, trimmed                                                                                                                                                                    | required |
+| `description`           | ≤ 500 chars; empty → `null`                                                                                                                                                             | `null`   |
+| `url`                   | see [URL rules](#url-rules)                                                                                                                                                             | required |
+| `method`                | `GET` `HEAD` `OPTIONS` `POST` `PUT` `PATCH`                                                                                                                                             | `GET`    |
+| `expectedStatusCode`    | 100–599                                                                                                                                                                                 | 200      |
+| `timeoutMs`             | 1000–30000                                                                                                                                                                              | 10000    |
+| `latencyThresholdMs`    | 1–30000, ≤ `timeoutMs`                                                                                                                                                                  | 2000     |
+| `checkIntervalSeconds`  | 60–86400                                                                                                                                                                                | 300      |
+| `requestBody`           | ≤ 32 KB (32,768 bytes) UTF-8, the same limit the executor enforces; POST/PUT/PATCH only; encrypted at rest                                                                              | `null`   |
+| `bodyContentType`       | media type; only with a body; `application/json` when omitted                                                                                                                           | `null`   |
+| `allowMutatingRequests` | boolean; **must be `true` for POST, PUT and PATCH** (explicit consent to scheduled requests that may create or modify data); never set implicitly; existing monitors default to `false` | `false`  |
+| `headers` (create only) | ≤ 20; RFC 9110 names; no CR/LF/NUL in values; ≤ 4096 chars each; ≤ 32 KB total; connection-level names (`Host`, `Content-Length`, `Transfer-Encoding`, `Content-Type`, …) refused       | `[]`     |
 
 `Monitor` responses contain everything above except header **values**: headers appear only as
 `{ name, configured: true, updatedAt }`. The list endpoint never includes the request body or
@@ -125,7 +126,7 @@ addressed to request fields (`url`, `headers.0.value`, `upsert.1.name`, …).
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/app/monitors`          | Registry: search (debounced), status and active/paused filters (kept in the URL), cursor pagination, quota, row actions (view, edit, pause/resume, delete), loading, empty, no-match and error states with retry                                               |
 | `/app/monitors/new`      | Create form: basic details, endpoint, performance, request body (size guidance), authentication headers (add/remove rows, show/hide values)                                                                                                                    |
-| `/app/monitors/:id`      | Details: Overview (stored status, last/next check, a note that history arrives with the monitoring engine) and Configuration (settings, header names marked "Credential configured", body presence and size only)                                              |
+| `/app/monitors/:id`      | Details: Overview (health, last check result, next check, request permission, Check now), History (recorded checks) and Configuration (settings, header names marked "Credential configured", body presence and size only)                                     |
 | `/app/monitors/:id/edit` | Same form, prefilled with non-secret settings. Saved headers show "Credential configured" with an empty field: empty means keep, typing replaces, **Remove** deletes. Changing to a different origin while secrets are saved opens a confirmation dialog first |
 
 The form validates with the same shared schemas as the API before sending, shows errors beside

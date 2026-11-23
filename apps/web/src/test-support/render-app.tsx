@@ -14,19 +14,24 @@ import { createFakeMonitorApi, type FakeMonitorApi } from './fake-monitor-api';
  * Renders the real route table, signed in with a test session, against the fake monitor API.
  * TEST ONLY: the session is not a real Supabase session and never reaches a server.
  */
-export function renderApp(path: string, fake: FakeMonitorApi = createFakeMonitorApi()) {
+export function renderApp(
+  path: string,
+  fake: FakeMonitorApi = createFakeMonitorApi(),
+  options: { signedIn?: boolean } = {},
+) {
+  const signedIn = options.signedIn ?? true;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
   });
   const signOut = vi.fn(async () => {});
   const auth: AuthContextValue = {
-    auth: {
-      status: 'signed-in',
-      session: { user: { email: 'tester@example.com' } } as Session,
-    },
+    // Signed out: no session and no access token, like a visitor of a public status page.
+    auth: signedIn
+      ? { status: 'signed-in', session: { user: { email: 'tester@example.com' } } as Session }
+      : { status: 'signed-out' },
     supabase: {} as SupabaseClient,
     api: createApiClient({
-      getAccessToken: async () => 'test-token',
+      getAccessToken: async () => (signedIn ? 'test-token' : null),
       refreshAccessToken: async () => null,
       fetch: fake.fetch,
     }),

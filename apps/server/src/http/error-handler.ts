@@ -2,6 +2,7 @@ import type { ApiErrorBody, ApiFieldIssue } from '@rain/shared';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
 import { AppError } from '../errors.js';
+import { isQueryError, safeError } from '../safe-error.js';
 
 function isBodyParserError(err: unknown): err is { type: string; status: number } {
   return typeof err === 'object' && err !== null && 'type' in err && 'status' in err;
@@ -51,10 +52,21 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
   }
   const appError = toAppError(err);
   if (appError.status >= 500) {
-    req.log.error({ err: appError.cause ?? err }, appError.message);
+    const cause = appError.cause ?? err;
+    // Database errors carry the SQL and its parameter values in their message: log only the
+    // driver's code and message. Other errors keep their stack for debugging.
+    req.log.error(
+      isQueryError(cause) ? { error: safeError(cause) } : { err: cause },
+      appError.message,
+    );
   }
   if (appError.status === 401) {
     res.setHeader('WWW-Authenticate', 'Bearer');
+  }
+  const retryAfter = (appError.details as { retryAfterSeconds?: unknown } | undefined)
+    ?.retryAfterSeconds;
+  if (appError.code === 'CHECK_COOLDOWN' && typeof retryAfter === 'number') {
+    res.setHeader('Retry-After', String(retryAfter));
   }
   const body: ApiErrorBody = {
     error: {

@@ -1,3 +1,16 @@
+import { PublicStatusPage } from '@/features/status-pages/public-status-page';
+import {
+  StatusPageEditorPage,
+  StatusPagePreviewPage,
+  StatusPagesPage,
+} from '@/features/status-pages/status-pages-pages';
+import {
+  NotificationDetailPage,
+  NotificationsPage,
+} from '@/features/notifications/notifications-page';
+import { AnalyticsPage } from '@/features/analytics/analytics-page';
+import { IncidentDetailPage } from '@/features/incidents/incident-detail-page';
+import { IncidentsPage } from '@/features/incidents/incidents-page';
 import { Navigate, createBrowserRouter, type RouteObject } from 'react-router';
 import { GuestOnly, RequireAuth } from './auth/route-guards';
 import { AppShell } from './components/app-shell';
@@ -28,6 +41,8 @@ export const routes: RouteObject[] = [
           { path: '/forgot-password', element: <ForgotPasswordPage /> },
         ],
       },
+      // Public status pages: no sign-in, no app shell.
+      { path: '/status/:slug', element: <PublicStatusPage /> },
       // Reachable signed in or out: the recovery link itself creates the session.
       { path: '/reset-password', element: <ResetPasswordPage /> },
       // Sign-in, email confirmation and password reset all land on "/".
@@ -44,6 +59,14 @@ export const routes: RouteObject[] = [
               { path: 'monitors/new', element: <NewMonitorPage /> },
               { path: 'monitors/:monitorId', element: <MonitorDetailPage /> },
               { path: 'monitors/:monitorId/edit', element: <EditMonitorPage /> },
+              { path: 'incidents', element: <IncidentsPage /> },
+              { path: 'analytics', element: <AnalyticsPage /> },
+              { path: 'notifications', element: <NotificationsPage /> },
+              { path: 'status-pages', element: <StatusPagesPage /> },
+              { path: 'status-pages/:statusPageId', element: <StatusPageEditorPage /> },
+              { path: 'status-pages/:statusPageId/preview', element: <StatusPagePreviewPage /> },
+              { path: 'notifications/:notificationId', element: <NotificationDetailPage /> },
+              { path: 'incidents/:incidentId', element: <IncidentDetailPage /> },
             ],
           },
         ],

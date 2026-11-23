@@ -10,8 +10,16 @@ import type { ProfileStore } from './db/profiles.js';
 import { AppError } from './errors.js';
 import { errorHandler, notFoundHandler } from './http/error-handler.js';
 import { genRequestId } from './http/request-id.js';
-import { monitorRouter } from './monitors/monitor-routes.js';
+import { monitorRouter, type ManualCheckRateLimits } from './monitors/monitor-routes.js';
 import type { MonitorService } from './monitors/monitor-service.js';
+import { analyticsRouter } from './analytics/analytics-routes.js';
+import type { AnalyticsService } from './analytics/analytics-service.js';
+import { publicStatusPageRouter, statusPageRouter } from './status-pages/status-page-routes.js';
+import type { StatusPageService } from './status-pages/status-page-service.js';
+import { notificationRouter } from './notifications/notification-routes.js';
+import type { NotificationService } from './notifications/notification-service.js';
+import { incidentRouter } from './incidents/incident-routes.js';
+import type { IncidentService } from './incidents/incident-service.js';
 import { healthRouter, type ReadinessProbe } from './routes/health.js';
 import { meRouter } from './routes/me.js';
 
@@ -22,12 +30,20 @@ export interface AppDependencies {
   verifyAccessToken: VerifyAccessToken;
   profiles: ProfileStore;
   monitors: MonitorService;
+  incidents: IncidentService;
+  analytics: AnalyticsService;
+  notifications: NotificationService;
+  statusPages: StatusPageService;
+  /** Requests per minute per client IP on the public status-page API. */
+  publicRateLimitPerMinute?: number;
   readiness: ReadinessProbe;
   /** Requests per minute per client IP on /api. */
   rateLimitPerMinute?: number;
+  /** Extra limits on POST /monitors/:id/check. */
+  manualCheckRateLimits?: ManualCheckRateLimits;
 }
 
-// Room for a 64 KB request body plus the maximum set of headers, JSON-encoded.
+// Room for a 32 KB request body plus the maximum set of headers (32 KB), JSON-encoded.
 export const BODY_LIMIT = '256kb';
 
 export function createApp(deps: AppDependencies): Express {
@@ -59,6 +75,13 @@ export function createApp(deps: AppDependencies): Express {
 
   app.use(healthRouter(deps.readiness));
 
+  // Public status pages: no authentication, their own rate limit, never cached. Mounted before
+  // the authenticated /api router so these paths never reach requireAuth.
+  app.use(
+    '/api/v1/public',
+    publicStatusPageRouter(deps.statusPages, { perIpPerMinute: deps.publicRateLimitPerMinute }),
+  );
+
   const api = express.Router();
   api.use(
     rateLimit({
@@ -78,7 +101,14 @@ export function createApp(deps: AppDependencies): Express {
     next();
   });
   api.use('/v1', meRouter(deps.profiles));
-  api.use('/v1', monitorRouter(deps.monitors));
+  api.use(
+    '/v1',
+    monitorRouter(deps.monitors, { manualCheckRateLimits: deps.manualCheckRateLimits }),
+  );
+  api.use('/v1', incidentRouter(deps.incidents));
+  api.use('/v1', analyticsRouter(deps.analytics));
+  api.use('/v1', notificationRouter(deps.notifications));
+  api.use('/v1', statusPageRouter(deps.statusPages));
   app.use('/api', api);
 
   app.use(notFoundHandler);

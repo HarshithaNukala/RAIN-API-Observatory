@@ -21,6 +21,7 @@ describe('monitor registry', () => {
       name: 'Search API',
       url: 'https://search.example.com/ping',
       method: 'POST',
+      allowMutatingRequests: true,
       enabled: false,
       currentStatus: 'DOWN',
       checkIntervalSeconds: 60,

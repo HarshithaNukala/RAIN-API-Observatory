@@ -4,10 +4,19 @@ import { Badge } from '@/components/ui/misc';
 import { statusLabel } from './format';
 
 const STYLE = {
-  UNKNOWN: { tone: 'neutral', dot: 'bg-muted-foreground' },
-  HEALTHY: { tone: 'success', dot: 'bg-success' },
-  DEGRADED: { tone: 'warning', dot: 'bg-warning' },
-  DOWN: { tone: 'danger', dot: 'bg-destructive' },
+  UNKNOWN: { tone: 'neutral', dot: 'bg-status-unknown' },
+  HEALTHY: {
+    tone: 'success',
+    dot: 'bg-status-healthy shadow-[0_0_6px_var(--color-status-healthy)]',
+  },
+  DEGRADED: {
+    tone: 'warning',
+    dot: 'bg-status-degraded shadow-[0_0_6px_var(--color-status-degraded)]',
+  },
+  DOWN: {
+    tone: 'danger',
+    dot: 'bg-status-down shadow-[0_0_6px_var(--color-status-down)] animate-pulse',
+  },
 } as const;
 
 /** The stored health status, exactly as last recorded. UNKNOWN until a real check has run. */

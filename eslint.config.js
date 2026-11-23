@@ -42,5 +42,31 @@ export default tseslint.config(
     files: ['apps/web/vite.config.ts'],
     languageOptions: { globals: globals.node },
   },
+  {
+    // Runtime server code: test doubles (MockAgent, test-support helpers that divert sockets or
+    // fake DNS) must never be reachable from the API or worker.
+    files: ['apps/server/src/**/*.ts'],
+    ignores: ['apps/server/src/**/*.test.ts', 'apps/server/src/test-support/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'undici',
+              importNames: ['MockAgent', 'MockClient', 'MockPool', 'mockErrors'],
+              message: 'Mock dispatchers are for tests only.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['**/test-support/**'],
+              message: 'test-support is for tests only; runtime code must not import it.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   prettier,
 );

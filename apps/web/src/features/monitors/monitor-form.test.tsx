@@ -52,6 +52,7 @@ describe('create monitor', () => {
     await user.type(await screen.findByLabelText('Name'), 'Payments API');
     await user.type(screen.getByLabelText('URL'), 'https://pay.example.com/health');
     await user.selectOptions(screen.getByLabelText('HTTP method'), 'POST');
+    await user.click(screen.getByLabelText(/allow scheduled mutating requests/i));
     await user.type(screen.getByLabelText('Body'), '{{"ping":true}');
     await user.click(screen.getByRole('button', { name: /add header/i }));
     await user.type(screen.getByLabelText('Header name'), 'Authorization');
@@ -73,6 +74,7 @@ describe('create monitor', () => {
           name: 'Payments API',
           url: 'https://pay.example.com/health',
           method: 'POST',
+          allowMutatingRequests: true,
           requestBody: '{"ping":true}',
           headers: [{ name: 'Authorization', value: SECRET }],
         }),
@@ -81,7 +83,105 @@ describe('create monitor', () => {
     // The new page shows that a credential exists, never what it is.
     await user.click(screen.getByRole('tab', { name: /configuration/i }));
     expect(await screen.findByText('Credential configured')).toBeInTheDocument();
+    expect(screen.getByText('Permitted (POST, PUT, PATCH)')).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(SECRET);
+    // Types ~100 characters through user-event and renders the full details page: about 2 s alone,
+    // longer than the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
+
+  describe('mutating-request permission', () => {
+    it('shows the unticked consent with its warning only for POST, PUT and PATCH', async () => {
+      const { user } = renderApp('/app/monitors/new');
+      await screen.findByLabelText('Name');
+      expect(screen.queryByLabelText(/allow scheduled mutating requests/i)).not.toBeInTheDocument();
+
+      for (const method of ['POST', 'PUT', 'PATCH']) {
+        await user.selectOptions(screen.getByLabelText('HTTP method'), method);
+        const consent = screen.getByLabelText(/allow scheduled mutating requests/i);
+        expect(consent).not.toBeChecked();
+        expect(consent).toHaveAccessibleDescription(/may create or modify data/);
+      }
+      await user.selectOptions(screen.getByLabelText('HTTP method'), 'HEAD');
+      expect(screen.queryByLabelText(/allow scheduled mutating requests/i)).not.toBeInTheDocument();
+    });
+
+    it('refuses to create a POST monitor without the consent and sends nothing', async () => {
+      const fake = createFakeMonitorApi();
+      const { user } = renderApp('/app/monitors/new', fake);
+      await user.type(await screen.findByLabelText('Name'), 'Writer');
+      await user.type(screen.getByLabelText('URL'), 'https://api.example.com/items');
+      await user.selectOptions(screen.getByLabelText('HTTP method'), 'POST');
+      await user.click(screen.getByRole('button', { name: 'Create monitor' }));
+
+      expect(
+        await screen.findByText(
+          'POST monitors need explicit permission to send repeated mutating requests',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText(/allow scheduled mutating requests/i)).toHaveFocus();
+      expect(writes(fake)).toHaveLength(0);
+    });
+
+    it('requires an explicit decision when editing an existing POST monitor saved without it', async () => {
+      const fake = createFakeMonitorApi();
+      // As after the migration: an existing POST monitor defaults to no permission.
+      const monitor = fake.seed({
+        name: 'Legacy writer',
+        method: 'POST',
+        allowMutatingRequests: false,
+      });
+      const { user } = renderApp(`/app/monitors/${monitor.id}/edit`, fake);
+      const consent = await screen.findByLabelText(/allow scheduled mutating requests/i);
+      expect(consent).not.toBeChecked();
+
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      expect(await screen.findByText(/need explicit permission/)).toBeInTheDocument();
+      expect(writes(fake)).toHaveLength(0);
+
+      await user.click(consent);
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await screen.findByRole('heading', { name: 'Legacy writer' });
+      expect(writes(fake)).toEqual([
+        {
+          method: 'PATCH',
+          path: `/api/v1/monitors/${monitor.id}`,
+          body: { allowMutatingRequests: true },
+        },
+      ]);
+    });
+  });
+
+  describe('request body limit', () => {
+    const limit = 32 * 1024;
+
+    async function createWithBody(body: string) {
+      const fake = createFakeMonitorApi();
+      const { user } = renderApp('/app/monitors/new', fake);
+      await user.type(await screen.findByLabelText('Name'), 'Sized');
+      await user.type(screen.getByLabelText('URL'), 'https://api.example.com/items');
+      await user.selectOptions(screen.getByLabelText('HTTP method'), 'PUT');
+      await user.click(screen.getByLabelText(/allow scheduled mutating requests/i));
+      await user.click(screen.getByLabelText('Body'));
+      await user.paste(body);
+      return { fake, user };
+    }
+
+    it('accepts a body of exactly 32 KB and shows the size against the limit', async () => {
+      const { fake, user } = await createWithBody('x'.repeat(limit));
+      expect(screen.getByLabelText('Body')).toHaveAccessibleDescription('32.0 KB of 32.0 KB');
+      await user.click(screen.getByRole('button', { name: 'Create monitor' }));
+      await screen.findByRole('heading', { name: 'Sized' });
+      expect(writes(fake)).toHaveLength(1);
+    }, 15_000);
+
+    it('rejects a body one byte over 32 KB beside the field and sends nothing', async () => {
+      const { fake, user } = await createWithBody('x'.repeat(limit + 1));
+      await user.click(screen.getByRole('button', { name: 'Create monitor' }));
+      expect(screen.getByLabelText('Body')).toHaveAccessibleDescription(
+        'Request body must be at most 32 KB',
+      );
+      expect(writes(fake)).toHaveLength(0);
+    }, 15_000);
   });
 
   it('prevents duplicate submission while saving', async () => {
@@ -118,6 +218,7 @@ function seedWithSecrets(fake: FakeMonitorApi) {
     name: 'Payments API',
     url: 'https://pay.example.com/health',
     method: 'POST',
+    allowMutatingRequests: true,
     requestBody: '{"amount":1}',
     bodyContentType: 'application/json',
     headers: [

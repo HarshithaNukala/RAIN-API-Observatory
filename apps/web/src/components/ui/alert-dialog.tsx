@@ -17,10 +17,10 @@ export function AlertDialogContent({
 }: ComponentProps<typeof AlertDialogPrimitive.Content>) {
   return (
     <AlertDialogPrimitive.Portal>
-      <AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60" />
+      <AlertDialogPrimitive.Overlay className="fixed inset-0 z-50 bg-[oklch(0.3_0.03_40/0.35)] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
       <AlertDialogPrimitive.Content
         className={cn(
-          'fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-card p-6 shadow-xl shadow-black/40',
+          'fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-card p-6 shadow-(--shadow-pop) data-[state=open]:animate-pop-in',
           className,
         )}
         {...props}

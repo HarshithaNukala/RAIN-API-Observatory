@@ -14,7 +14,7 @@ export function App({ supabase }: { supabase: SupabaseClient }) {
       <AuthProvider supabase={supabase}>
         <RouterProvider router={router} />
       </AuthProvider>
-      <Toaster theme="dark" position="bottom-right" richColors closeButton />
+      <Toaster theme="light" position="bottom-right" richColors closeButton />
     </QueryClientProvider>
   );
 }

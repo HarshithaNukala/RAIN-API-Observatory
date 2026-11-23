@@ -1,6 +1,8 @@
 import type { Monitor } from '@rain/shared';
 import {
   Activity,
+  BarChart3,
+  BellRing,
   Clock,
   History,
   KeyRound,
@@ -23,6 +25,11 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/lib/api-client';
 import { useMonitor } from './api';
+import { MonitorAnalytics } from '@/features/analytics/monitor-analytics';
+import { MonitorNotifications } from '@/features/notifications/monitor-notifications';
+import { MonitorIncidents } from '@/features/incidents/monitor-incidents';
+import { CheckHistory, LastCheckCard } from './checks';
+import { useCheckNowControl } from './use-check-now-control';
 import { byteLength, formatBytes, formatDateTime, formatInterval, formatRelative } from './format';
 import { DeleteMonitorDialog } from './monitor-actions';
 import { usePauseResume } from './use-pause-resume';
@@ -170,10 +177,21 @@ function OverviewTab({ monitor }: { monitor: Monitor }) {
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardDescription>Stored status</CardDescription>
+            <CardDescription>Health</CardDescription>
             <div className="pt-1">
               <MonitorStateBadges status={monitor.currentStatus} enabled={monitor.enabled} />
             </div>
+            {monitor.statusChangedAt && (
+              <p className="text-xs text-muted-foreground">
+                Since{' '}
+                <time
+                  dateTime={monitor.statusChangedAt}
+                  title={formatDateTime(monitor.statusChangedAt)}
+                >
+                  {formatRelative(monitor.statusChangedAt)}
+                </time>
+              </p>
+            )}
           </CardHeader>
         </Card>
         <Card>
@@ -199,17 +217,28 @@ function OverviewTab({ monitor }: { monitor: Monitor }) {
             <CardTitle className="text-sm font-medium">
               {!monitor.enabled || !monitor.nextCheckAt
                 ? 'None while paused'
-                : formatDateTime(monitor.nextCheckAt)}
+                : monitor.manualCheckQueuedAt
+                  ? 'Manual check queued'
+                  : formatDateTime(monitor.nextCheckAt)}
             </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Every {formatInterval(monitor.checkIntervalSeconds)}
+            </p>
           </CardHeader>
         </Card>
       </div>
-      <Card className="border-dashed bg-transparent">
-        <EmptyState icon={History} title="No check history yet">
-          RAIN stores this monitor's configuration, but health checks are not running yet. Response
-          times, uptime and incidents will appear here once the monitoring engine is enabled. Until
-          then the status stays <strong>Unknown</strong> unless a real check has recorded one.
-        </EmptyState>
+      <LastCheckCard monitorId={monitor.id} />
+      <MonitorIncidents monitorId={monitor.id} />
+      <Card>
+        <CardHeader>
+          <CardDescription>Request permission</CardDescription>
+          <CardTitle className="text-sm font-medium">
+            <span className="font-mono">{monitor.method}</span> ·{' '}
+            {monitor.allowMutatingRequests
+              ? 'Repeated POST, PUT and PATCH requests are permitted'
+              : 'Read-only requests only (GET, HEAD, OPTIONS)'}
+          </CardTitle>
+        </CardHeader>
       </Card>
     </div>
   );
@@ -237,6 +266,9 @@ function ConfigurationTab({ monitor }: { monitor: Monitor }) {
             </Detail>
             <Detail label="Check interval">
               Every {formatInterval(monitor.checkIntervalSeconds)}
+            </Detail>
+            <Detail label="Mutating requests">
+              {monitor.allowMutatingRequests ? 'Permitted (POST, PUT, PATCH)' : 'Not permitted'}
             </Detail>
             <Detail label="Request body">
               {monitor.requestBody === null
@@ -314,7 +346,37 @@ export function MonitorDetailPage() {
     );
   }
 
-  const toggling = pendingId === monitor.id;
+  return (
+    <MonitorDetailView
+      monitor={monitor}
+      toggling={pendingId === monitor.id}
+      onToggle={() => toggle(monitor)}
+      onDelete={() => setDeleting(true)}
+      deleteDialog={
+        <DeleteMonitorDialog
+          monitor={deleting ? monitor : null}
+          onOpenChange={setDeleting}
+          onDeleted={() => void navigate('/app/monitors', { replace: true })}
+        />
+      }
+    />
+  );
+}
+
+function MonitorDetailView({
+  monitor,
+  toggling,
+  onToggle,
+  onDelete,
+  deleteDialog,
+}: {
+  monitor: Monitor;
+  toggling: boolean;
+  onToggle: () => void;
+  onDelete: () => void;
+  deleteDialog: ReactNode;
+}) {
+  const checkNow = useCheckNowControl(monitor);
   return (
     <div className="grid gap-6">
       <PageHeader
@@ -333,7 +395,8 @@ export function MonitorDetailPage() {
         }
         actions={
           <>
-            <Button variant="outline" disabled={toggling} onClick={() => toggle(monitor)}>
+            {checkNow.button}
+            <Button variant="outline" disabled={toggling} onClick={onToggle}>
               {toggling ? (
                 <Spinner label="Updating" />
               ) : monitor.enabled ? (
@@ -348,7 +411,7 @@ export function MonitorDetailPage() {
                 <Pencil aria-hidden /> Edit
               </Link>
             </Button>
-            <Button variant="destructive" onClick={() => setDeleting(true)}>
+            <Button variant="destructive" onClick={onDelete}>
               <Trash2 aria-hidden /> Delete
             </Button>
           </>
@@ -361,12 +424,28 @@ export function MonitorDetailPage() {
           schedule checks again.
         </Alert>
       )}
+      {checkNow.status}
 
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">
             <span className="flex items-center gap-2">
               <Activity className="size-4" aria-hidden /> Overview
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="analytics">
+            <span className="flex items-center gap-2">
+              <BarChart3 className="size-4" aria-hidden /> Analytics
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="notifications">
+            <span className="flex items-center gap-2">
+              <BellRing className="size-4" aria-hidden /> Notifications
+            </span>
+          </TabsTrigger>
+          <TabsTrigger value="history">
+            <span className="flex items-center gap-2">
+              <History className="size-4" aria-hidden /> History
             </span>
           </TabsTrigger>
           <TabsTrigger value="configuration">
@@ -378,16 +457,21 @@ export function MonitorDetailPage() {
         <TabsContent value="overview">
           <OverviewTab monitor={monitor} />
         </TabsContent>
+        <TabsContent value="analytics">
+          <MonitorAnalytics monitorId={monitor.id} />
+        </TabsContent>
+        <TabsContent value="notifications">
+          <MonitorNotifications monitorId={monitor.id} />
+        </TabsContent>
+        <TabsContent value="history">
+          <CheckHistory monitorId={monitor.id} />
+        </TabsContent>
         <TabsContent value="configuration">
           <ConfigurationTab monitor={monitor} />
         </TabsContent>
       </Tabs>
 
-      <DeleteMonitorDialog
-        monitor={deleting ? monitor : null}
-        onOpenChange={setDeleting}
-        onDeleted={() => void navigate('/app/monitors', { replace: true })}
-      />
+      {deleteDialog}
     </div>
   );
 }

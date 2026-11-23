@@ -16,6 +16,10 @@ export const REDACT_PATHS = [
   '*.databaseUrl',
   '*.DATABASE_URL',
   '*.SUPABASE_JWT_SECRET',
+  '*.apiKey',
+  '*.RESEND_API_KEY',
+  '*.ENCRYPTION_KEY',
+  '*.signingSecret',
 ];
 
 export interface LoggerOptions {

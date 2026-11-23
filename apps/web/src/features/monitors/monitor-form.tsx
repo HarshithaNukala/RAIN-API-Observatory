@@ -3,6 +3,7 @@ import {
   HEADER_LIMITS,
   MONITOR_LIMITS,
   MONITOR_METHODS,
+  MUTATING_REQUESTS_WARNING,
   methodAllowsBody,
   monitorOrigin,
   type CreateMonitor,
@@ -12,7 +13,7 @@ import {
   type MonitorMethod,
   type UpdateMonitorInput,
 } from '@rain/shared';
-import { Eye, EyeOff, KeyRound, Plus, RotateCcw, Trash2, Undo2 } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, KeyRound, Plus, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Alert } from '@/components/ui/alert';
 import {
@@ -57,6 +58,7 @@ interface MonitorFormValues {
   checkIntervalSeconds: string;
   requestBody: string;
   bodyContentType: string;
+  allowMutatingRequests: boolean;
   headers: HeaderRow[];
 }
 
@@ -77,6 +79,8 @@ function initialValues(monitor?: Monitor): MonitorFormValues {
     checkIntervalSeconds: String(monitor?.checkIntervalSeconds ?? L.checkIntervalSeconds.default),
     requestBody: monitor?.requestBody ?? '',
     bodyContentType: monitor?.bodyContentType ?? '',
+    // Never pre-ticked: only the owner's saved decision, or false.
+    allowMutatingRequests: monitor?.allowMutatingRequests ?? false,
     headers: (monitor?.headers ?? []).map((h) => ({
       key: rowKey(),
       kind: 'stored',
@@ -118,6 +122,7 @@ function validate(values: MonitorFormValues): { data?: CreateMonitor; errors: Er
     checkIntervalSeconds: toNumber(values.checkIntervalSeconds),
     requestBody: values.requestBody,
     bodyContentType: values.bodyContentType,
+    allowMutatingRequests: values.allowMutatingRequests,
     headers: withValues.map(({ name, value }) => ({ name, value })),
   };
   const result = CreateMonitorSchema.safeParse(input);
@@ -168,6 +173,9 @@ function settingsPatch(next: CreateMonitor, saved: Monitor): UpdateMonitorInput 
     ? (next.bodyContentType ?? L.defaultBodyContentType)
     : null;
   if (effectiveType !== saved.bodyContentType) patch.bodyContentType = next.bodyContentType;
+  if (next.allowMutatingRequests !== saved.allowMutatingRequests) {
+    patch.allowMutatingRequests = next.allowMutatingRequests;
+  }
   return patch;
 }
 
@@ -225,7 +233,7 @@ function Field({
         ...((error || hint) && { 'aria-describedby': messageId }),
       })}
       {error ? (
-        <p id={messageId} className="text-xs text-destructive">
+        <p id={messageId} className="text-xs font-semibold text-status-down-fg">
           {error}
         </p>
       ) : hint ? (
@@ -254,6 +262,51 @@ function Section({
       </CardHeader>
       <CardContent className="grid gap-5 md:grid-cols-2">{children}</CardContent>
     </Card>
+  );
+}
+
+/** Explicit, never pre-ticked consent to scheduled POST/PUT/PATCH requests. */
+function MutatingRequestsConsent({
+  checked,
+  error,
+  onChange,
+}: {
+  checked: boolean;
+  error?: string | undefined;
+  onChange: (checked: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <div
+      className={`grid gap-2 rounded-md border p-4 md:col-span-2 ${
+        error ? 'border-destructive/60 bg-destructive/5' : 'border-warning/40 bg-warning/5'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={`${id}-warning`}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+        />
+        <div className="grid gap-1">
+          <Label htmlFor={id} className="cursor-pointer leading-snug">
+            Allow scheduled mutating requests (POST, PUT, PATCH)
+          </Label>
+          <p id={`${id}-warning`} className="flex gap-1.5 text-xs text-muted-foreground">
+            <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+            <span>
+              {MUTATING_REQUESTS_WARNING} Only enable this for endpoints that are safe to call
+              repeatedly.
+            </span>
+          </p>
+        </div>
+      </div>
+      {error && <p className="text-xs font-semibold text-status-down-fg">{error}</p>}
+    </div>
   );
 }
 
@@ -331,7 +384,7 @@ function HeaderEditor({
           return (
             <div
               key={row.key}
-              className="grid gap-3 rounded-md border border-border bg-background/40 p-3 sm:grid-cols-[minmax(0,12rem)_1fr_auto] sm:items-start"
+              className="grid gap-3 rounded-xl border border-border bg-muted/50 p-3 sm:grid-cols-[minmax(0,12rem)_1fr_auto] sm:items-start"
             >
               <div className="flex min-h-10 items-center gap-2">
                 <KeyRound className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -355,7 +408,9 @@ function HeaderEditor({
                     error={valueError}
                     onChange={(replacement) => update(row.key, { replacement })}
                   />
-                  {valueError && <p className="text-xs text-destructive">{valueError}</p>}
+                  {valueError && (
+                    <p className="text-xs font-semibold text-status-down-fg">{valueError}</p>
+                  )}
                 </div>
               )}
               <Button
@@ -374,7 +429,7 @@ function HeaderEditor({
         return (
           <div
             key={row.key}
-            className="grid gap-3 rounded-md border border-border bg-background/40 p-3 sm:grid-cols-[minmax(0,12rem)_1fr_auto] sm:items-start"
+            className="grid gap-3 rounded-xl border border-border bg-muted/50 p-3 sm:grid-cols-[minmax(0,12rem)_1fr_auto] sm:items-start"
           >
             <div className="grid gap-1.5">
               <Input
@@ -387,7 +442,9 @@ function HeaderEditor({
                 onChange={(e) => update(row.key, { name: e.target.value })}
                 className="font-mono"
               />
-              {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+              {nameError && (
+                <p className="text-xs font-semibold text-status-down-fg">{nameError}</p>
+              )}
             </div>
             <div className="grid gap-1.5">
               <SecretInput
@@ -397,7 +454,9 @@ function HeaderEditor({
                 error={valueError}
                 onChange={(value) => update(row.key, { value })}
               />
-              {valueError && <p className="text-xs text-destructive">{valueError}</p>}
+              {valueError && (
+                <p className="text-xs font-semibold text-status-down-fg">{valueError}</p>
+              )}
             </div>
             <Button
               type="button"
@@ -411,7 +470,9 @@ function HeaderEditor({
           </div>
         );
       })}
-      {errors.headers && <p className="text-xs text-destructive">{errors.headers}</p>}
+      {errors.headers && (
+        <p className="text-xs font-semibold text-status-down-fg">{errors.headers}</p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button
           type="button"
@@ -682,6 +743,13 @@ export function MonitorForm({ monitor, onSaved, onCancel }: MonitorFormProps) {
             />
           )}
         </Field>
+        {(bodyAllowed || values.allowMutatingRequests) && (
+          <MutatingRequestsConsent
+            checked={values.allowMutatingRequests}
+            error={errors.allowMutatingRequests}
+            onChange={(checked) => set('allowMutatingRequests', checked)}
+          />
+        )}
       </Section>
 
       <Section title="Performance" description="When a check counts as slow or failed.">

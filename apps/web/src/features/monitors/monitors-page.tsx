@@ -31,7 +31,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { MONITOR_PAGE_SIZE as PAGE_SIZE, useMonitorList, type MonitorStateFilter } from './api';
-import { formatInterval, formatRelative, statusLabel } from './format';
+import { formatDateTime, formatInterval, formatRelative, statusLabel } from './format';
 import { DeleteMonitorDialog } from './monitor-actions';
 import { usePauseResume } from './use-pause-resume';
 import { MonitorStateBadges } from './status-badge';
@@ -108,7 +108,7 @@ function SkeletonRows() {
     <tbody aria-busy>
       {Array.from({ length: 5 }, (_, i) => (
         <tr key={i} className="border-t border-border">
-          <Td colSpan={7}>
+          <Td colSpan={8}>
             <Skeleton className="h-6" />
           </Td>
         </tr>
@@ -265,8 +265,8 @@ export function MonitorsPage() {
                 </Button>
               }
             >
-              Add the API endpoints you want RAIN to watch. Health checks start once the monitoring
-              engine is enabled; until then every monitor shows an unknown status.
+              Add the API endpoints you want RAIN to watch. Each monitor shows Unknown until its
+              first check has run.
             </EmptyState>
           )}
         </Card>
@@ -281,6 +281,7 @@ export function MonitorsPage() {
                 <Th className="hidden sm:table-cell">Status</Th>
                 <Th className="hidden xl:table-cell">Interval</Th>
                 <Th className="hidden lg:table-cell">Last checked</Th>
+                <Th className="hidden 2xl:table-cell">Next check</Th>
                 <Th className="w-12">
                   <span className="sr-only">Actions</span>
                 </Th>
@@ -293,7 +294,7 @@ export function MonitorsPage() {
                 {data.items.map((m) => (
                   <tr key={m.id} className="border-t border-border hover:bg-accent/30">
                     {/* On phones this column takes the remaining width and also shows status. */}
-                    <Td className="w-full max-w-0 sm:w-auto sm:max-w-64">
+                    <Td className="w-full max-w-0 sm:w-auto sm:max-w-56">
                       <Link
                         to={`/app/monitors/${m.id}`}
                         className="block truncate font-medium hover:text-primary"
@@ -324,6 +325,17 @@ export function MonitorsPage() {
                         <time dateTime={m.lastCheckedAt}>{formatRelative(m.lastCheckedAt)}</time>
                       ) : (
                         'Never'
+                      )}
+                    </Td>
+                    <Td className="hidden text-muted-foreground 2xl:table-cell">
+                      {!m.enabled || !m.nextCheckAt ? (
+                        '—'
+                      ) : m.manualCheckQueuedAt ? (
+                        'Queued now'
+                      ) : (
+                        <time dateTime={m.nextCheckAt} title={formatDateTime(m.nextCheckAt)}>
+                          {formatRelative(m.nextCheckAt)}
+                        </time>
                       )}
                     </Td>
                     <Td>

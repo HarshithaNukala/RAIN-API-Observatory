@@ -180,17 +180,42 @@ describe('loadServerConfig encryption and limits', () => {
 });
 
 describe('loadWorkerConfig', () => {
-  it('needs only the database URL', () => {
-    expect(loadWorkerConfig({ DATABASE_URL: SECRET_DB_URL, LOG_LEVEL: 'debug' })).toEqual({
+  const workerEnv = { DATABASE_URL: SECRET_DB_URL, ENCRYPTION_KEY: KEY };
+
+  it('needs the database URL and the encryption key, and applies worker defaults', () => {
+    const config = loadWorkerConfig({ ...workerEnv, LOG_LEVEL: 'debug' });
+    expect(config).toMatchObject({
       env: 'development',
       logLevel: 'debug',
       databaseUrl: SECRET_DB_URL,
+      worker: { concurrency: 25, pollIntervalMs: 1000, leaseSeconds: 90, shutdownGraceMs: 35_000 },
     });
+    expect(config.encryption.keys.get(1)).toHaveLength(32);
+  });
+
+  it('requires the encryption key, without echoing secrets', () => {
+    const problems = problemsOf(() => loadWorkerConfig({ DATABASE_URL: SECRET_DB_URL }));
+    expect(problems.join()).toMatch(/ENCRYPTION_KEY/);
+    expect(problems.join()).not.toContain('sup3r-s3cret');
   });
 
   it('rejects an unknown log level', () => {
+    expect(problemsOf(() => loadWorkerConfig({ ...workerEnv, LOG_LEVEL: 'loud' }))[0]).toMatch(
+      /LOG_LEVEL/,
+    );
+  });
+
+  it('rejects a lease that would not outlast the longest request', () => {
     expect(
-      problemsOf(() => loadWorkerConfig({ DATABASE_URL: SECRET_DB_URL, LOG_LEVEL: 'loud' }))[0],
-    ).toMatch(/LOG_LEVEL/);
+      problemsOf(() => loadWorkerConfig({ ...workerEnv, WORKER_LEASE_SECONDS: '30' }))[0],
+    ).toMatch(/WORKER_LEASE_SECONDS: must be at least 45/);
+  });
+
+  it('rejects out-of-range concurrency and poll interval', () => {
+    const problems = problemsOf(() =>
+      loadWorkerConfig({ ...workerEnv, WORKER_CONCURRENCY: '0', WORKER_POLL_INTERVAL_MS: '5' }),
+    );
+    expect(problems.join()).toMatch(/WORKER_CONCURRENCY/);
+    expect(problems.join()).toMatch(/WORKER_POLL_INTERVAL_MS/);
   });
 });

@@ -14,6 +14,7 @@ describe('monitor details', () => {
       description: 'Card payments',
       url: 'https://pay.example.com/health',
       method: 'POST',
+      allowMutatingRequests: true,
       expectedStatusCode: 201,
       timeoutMs: 5000,
       latencyThresholdMs: 800,
@@ -28,7 +29,10 @@ describe('monitor details', () => {
     expect(screen.getByText('Card payments')).toBeInTheDocument();
     expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
     expect(screen.getByText('Never')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'No check history yet' })).toBeInTheDocument();
+    expect(await screen.findByText(/No check has run yet/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Repeated POST, PUT and PATCH requests are permitted/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/uptime \d/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: /configuration/i }));
@@ -106,7 +110,7 @@ describe('application shell', () => {
       within(nav)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Overview', 'Monitors']);
+    ).toEqual(['Overview', 'Monitors', 'Incidents', 'Analytics', 'Notifications', 'Status pages']);
     const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(crumbs).getByRole('link', { name: 'Monitors' })).toHaveAttribute(
       'href',

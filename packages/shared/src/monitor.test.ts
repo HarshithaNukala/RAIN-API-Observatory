@@ -31,6 +31,7 @@ describe('CreateMonitorSchema', () => {
       timeoutMs: 10_000,
       latencyThresholdMs: 2000,
       checkIntervalSeconds: 300,
+      allowMutatingRequests: false,
       requestBody: null,
       bodyContentType: null,
       headers: [],
@@ -49,6 +50,7 @@ describe('CreateMonitorSchema', () => {
     const parsed = CreateMonitorSchema.parse({
       ...valid,
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: '{"ping":true}',
       bodyContentType: 'application/json; charset=utf-8',
       headers: [{ name: 'Authorization', value: 'Bearer abc' }],
@@ -124,17 +126,18 @@ describe('CreateMonitorSchema', () => {
     }
   });
 
-  it('measures the request body limit in UTF-8 bytes', () => {
-    const post = { ...valid, method: 'POST' };
+  it('limits the request body to 32 KB (32,768 bytes), measured in UTF-8', () => {
+    expect(MONITOR_LIMITS.requestBodyMaxBytes).toBe(32_768);
+    const post = { ...valid, method: 'POST', allowMutatingRequests: true };
     const max = MONITOR_LIMITS.requestBodyMaxBytes;
     expect(messagesFor(CreateMonitorSchema, { ...post, requestBody: 'a'.repeat(max) })).toEqual([]);
     expect(
       messagesFor(CreateMonitorSchema, { ...post, requestBody: 'a'.repeat(max + 1) })[0],
-    ).toMatch(/64 KB/);
+    ).toMatch(/32 KB/);
     // "é" is two bytes, so half as many characters already exceeds the limit.
     expect(
       messagesFor(CreateMonitorSchema, { ...post, requestBody: 'é'.repeat(max / 2 + 1) })[0],
-    ).toMatch(/64 KB/);
+    ).toMatch(/32 KB/);
   });
 });
 
@@ -302,6 +305,7 @@ describe('findMonitorConfigIssues', () => {
         latencyThresholdMs: 800,
         requestBody: '{}',
         bodyContentType: 'application/json',
+        allowMutatingRequests: true,
       }),
     ).toEqual([]);
   });
@@ -313,8 +317,67 @@ describe('findMonitorConfigIssues', () => {
       latencyThresholdMs: 2000,
       requestBody: '{}',
       bodyContentType: null,
+      allowMutatingRequests: false,
     });
     expect(issues.map((i) => i.path)).toEqual(['requestBody', 'latencyThresholdMs']);
+  });
+
+  it.each(['POST', 'PUT', 'PATCH'] as const)(
+    'requires explicit permission for %s, with or without a body',
+    (method) => {
+      for (const requestBody of ['{}', null]) {
+        const issues = findMonitorConfigIssues({
+          method,
+          timeoutMs: 5000,
+          latencyThresholdMs: 800,
+          requestBody,
+          bodyContentType: null,
+          allowMutatingRequests: false,
+        });
+        expect(issues).toEqual([
+          {
+            path: 'allowMutatingRequests',
+            message: `${method} monitors need explicit permission to send repeated mutating requests`,
+          },
+        ]);
+      }
+    },
+  );
+
+  it.each(['GET', 'HEAD', 'OPTIONS'] as const)('needs no permission for %s', (method) => {
+    const config = {
+      method,
+      timeoutMs: 5000,
+      latencyThresholdMs: 800,
+      requestBody: null,
+      bodyContentType: null,
+    };
+    expect(findMonitorConfigIssues({ ...config, allowMutatingRequests: false })).toEqual([]);
+    expect(findMonitorConfigIssues({ ...config, allowMutatingRequests: true })).toEqual([]);
+  });
+});
+
+describe('allowMutatingRequests', () => {
+  const base = { name: 'Writer', url: 'https://api.example.com/items' };
+
+  it('defaults to false and is never implied by the method', () => {
+    expect(CreateMonitorSchema.parse(base).allowMutatingRequests).toBe(false);
+    const result = CreateMonitorSchema.safeParse({ ...base, method: 'POST' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path.join('.'))).toEqual(['allowMutatingRequests']);
+  });
+
+  it('accepts a mutating monitor only with explicit permission', () => {
+    expect(
+      CreateMonitorSchema.parse({ ...base, method: 'PUT', allowMutatingRequests: true }),
+    ).toMatchObject({ method: 'PUT', allowMutatingRequests: true });
+  });
+
+  it('must be a real boolean, not a truthy string', () => {
+    expect(
+      CreateMonitorSchema.safeParse({ ...base, method: 'POST', allowMutatingRequests: 'yes' })
+        .success,
+    ).toBe(false);
   });
 });
 

@@ -9,6 +9,8 @@ const METHODS = [
   'pause',
   'resume',
   'remove',
+  'requestCheck',
+  'listChecks',
 ] as const;
 
 /** A MonitorService whose methods fail loudly unless a test supplies them. */

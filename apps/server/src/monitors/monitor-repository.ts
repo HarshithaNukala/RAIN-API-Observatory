@@ -1,11 +1,13 @@
-import type { MonitorStatus } from '@rain/shared';
+import type { MonitorCheckSource, MonitorStatus } from '@rain/shared';
 import { and, count, desc, eq, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { PgTransactionConfig } from 'drizzle-orm/pg-core';
 import type { Database } from '../db/client.js';
 import {
+  monitorChecks,
   monitorHeaders,
   monitors,
   profiles,
+  type MonitorCheckRow,
   type MonitorHeaderRow,
   type MonitorRow,
 } from '../db/schema.js';
@@ -18,6 +20,13 @@ export interface MonitorFilters {
   search?: string | undefined;
   enabled?: boolean | undefined;
   status?: MonitorStatus | undefined;
+}
+
+export interface CheckListOptions {
+  source?: MonitorCheckSource | undefined;
+  limit: number;
+  /** Position of the last check on the previous page, in (checked_at DESC, id DESC) order. */
+  after?: { checkedAt: Date; id: string } | undefined;
 }
 
 export type NewMonitorRow = typeof monitors.$inferInsert;
@@ -40,14 +49,19 @@ const summaryColumns = {
   timeoutMs: monitors.timeoutMs,
   latencyThresholdMs: monitors.latencyThresholdMs,
   checkIntervalSeconds: monitors.checkIntervalSeconds,
+  allowMutatingRequests: monitors.allowMutatingRequests,
   bodyContentType: monitors.bodyContentType,
   enabled: monitors.enabled,
   currentStatus: monitors.currentStatus,
   consecutiveFailures: monitors.consecutiveFailures,
   consecutiveSuccesses: monitors.consecutiveSuccesses,
+  statusChangedAt: monitors.statusChangedAt,
   lastCheckedAt: monitors.lastCheckedAt,
   nextCheckAt: monitors.nextCheckAt,
   leaseUntil: monitors.leaseUntil,
+  leaseToken: monitors.leaseToken,
+  manualCheckRequestedAt: monitors.manualCheckRequestedAt,
+  lastManualCheckAt: monitors.lastManualCheckAt,
   createdAt: monitors.createdAt,
   updatedAt: monitors.updatedAt,
 };
@@ -158,6 +172,32 @@ function queries(db: Executor) {
         .from(monitorHeaders)
         .where(inArray(monitorHeaders.monitorId, ownedMonitorId(ownerId, monitorId)))
         .orderBy(sql`lower(${monitorHeaders.headerName})`);
+    },
+
+    /** A monitor's checks, newest first. Fetch `limit + 1` to learn whether another page exists. */
+    listChecks(
+      ownerId: string,
+      monitorId: string,
+      options: CheckListOptions,
+    ): Promise<MonitorCheckRow[]> {
+      const conditions: SQL[] = [
+        inArray(monitorChecks.monitorId, ownedMonitorId(ownerId, monitorId)),
+      ];
+      if (options.source) conditions.push(eq(monitorChecks.source, options.source));
+      const { after } = options;
+      if (after) {
+        const older = or(
+          lt(monitorChecks.checkedAt, after.checkedAt),
+          and(eq(monitorChecks.checkedAt, after.checkedAt), lt(monitorChecks.id, after.id)),
+        );
+        if (older) conditions.push(older);
+      }
+      return db
+        .select()
+        .from(monitorChecks)
+        .where(and(...conditions))
+        .orderBy(desc(monitorChecks.checkedAt), desc(monitorChecks.id))
+        .limit(options.limit);
     },
 
     async insertHeaders(rows: NewMonitorHeaderRow[]): Promise<void> {

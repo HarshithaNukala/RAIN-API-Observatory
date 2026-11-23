@@ -1,3 +1,6 @@
+import { stubStatusPageService } from '../../apps/server/src/test-support/status-page-service-stub.js';
+import { stubNotificationService } from '../../apps/server/src/test-support/notification-service-stub.js';
+import { stubAnalyticsService } from '../../apps/server/src/test-support/analytics-service-stub.js';
 import { randomUUID } from 'node:crypto';
 import { MeSchema, dataEnvelope } from '@rain/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -10,6 +13,7 @@ import { createProfileStore } from '../../apps/server/src/db/profiles.js';
 import { profiles } from '../../apps/server/src/db/schema.js';
 import { AppError } from '../../apps/server/src/errors.js';
 import { client } from '../../apps/server/src/test-support/http.js';
+import { stubIncidentService } from '../../apps/server/src/test-support/incident-service-stub.js';
 import { stubMonitorService } from '../../apps/server/src/test-support/monitor-service-stub.js';
 import {
   TEST_AUDIENCE,
@@ -92,6 +96,10 @@ describe('API against the real database', () => {
       }),
       profiles: store,
       monitors: stubMonitorService(),
+      incidents: stubIncidentService(),
+      analytics: stubAnalyticsService(),
+      notifications: stubNotificationService(),
+      statusPages: stubStatusPageService(),
       readiness: async () => {
         await database.ping();
         return { database: 'ok', auth: 'ok' };

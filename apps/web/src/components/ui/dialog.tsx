@@ -7,7 +7,8 @@ export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogClose = DialogPrimitive.Close;
 
-const overlayClass = 'fixed inset-0 z-50 bg-black/60 backdrop-blur-[1px]';
+const overlayClass =
+  'fixed inset-0 z-50 bg-[oklch(0.3_0.03_40/0.35)] backdrop-blur-[2px] data-[state=open]:animate-fade-in';
 
 export function DialogContent({
   className,
@@ -19,7 +20,7 @@ export function DialogContent({
       <DialogPrimitive.Overlay className={overlayClass} />
       <DialogPrimitive.Content
         className={cn(
-          'fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-card p-6 shadow-xl shadow-black/40',
+          'fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-border bg-card p-6 shadow-(--shadow-pop) data-[state=open]:animate-pop-in',
           className,
         )}
         {...props}
@@ -47,7 +48,7 @@ export function SheetContent({
       <DialogPrimitive.Overlay className={overlayClass} />
       <DialogPrimitive.Content
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-border bg-card shadow-xl shadow-black/40',
+          'fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-border bg-card shadow-(--shadow-pop) data-[state=open]:animate-slide-in-left',
           className,
         )}
         {...props}

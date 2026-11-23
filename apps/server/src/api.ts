@@ -9,6 +9,14 @@ import { loadDotEnv } from './env-file.js';
 import { createLogger } from './logger.js';
 import { createMonitorRepository } from './monitors/monitor-repository.js';
 import { createMonitorService } from './monitors/monitor-service.js';
+import { createAnalyticsRepository } from './analytics/analytics-repository.js';
+import { createAnalyticsService } from './analytics/analytics-service.js';
+import { createNotificationRepository } from './notifications/notification-repository.js';
+import { createNotificationService } from './notifications/notification-service.js';
+import { createStatusPageRepository } from './status-pages/status-page-repository.js';
+import { createStatusPageService } from './status-pages/status-page-service.js';
+import { createIncidentRepository } from './incidents/incident-repository.js';
+import { createIncidentService } from './incidents/incident-service.js';
 
 loadDotEnv();
 
@@ -36,6 +44,7 @@ const jwks = createRemoteJWKSet(new URL(config.auth.jwksUrl), {
 });
 
 const profiles = createProfileStore(database.db);
+const secretBox = createSecretBox(config.encryption);
 
 const app = createApp({
   logger,
@@ -51,8 +60,19 @@ const app = createApp({
   monitors: createMonitorService({
     repository: createMonitorRepository(database.db),
     profiles,
-    secretBox: createSecretBox(config.encryption),
+    secretBox,
     maxMonitorsPerUser: config.maxMonitorsPerUser,
+  }),
+  incidents: createIncidentService({ repository: createIncidentRepository(database.db) }),
+  analytics: createAnalyticsService({ repository: createAnalyticsRepository(database.db) }),
+  statusPages: createStatusPageService({
+    repository: createStatusPageRepository(database.db),
+    profiles,
+  }),
+  notifications: createNotificationService({
+    repository: createNotificationRepository(database.db),
+    secretBox,
+    emailConfigured: config.emailConfigured,
   }),
   readiness: async () => {
     const [db, auth] = await Promise.allSettled([

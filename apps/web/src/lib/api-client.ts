@@ -129,6 +129,8 @@ export function createApiClient(options: ApiClientOptions) {
       request(path, schema, withBody('POST', body)),
     patch: <T extends z.ZodType>(path: string, schema: T, body: unknown) =>
       request(path, schema, withBody('PATCH', body)),
+    put: <T extends z.ZodType>(path: string, schema: T, body: unknown) =>
+      request(path, schema, withBody('PUT', body)),
     /** PATCH whose response is validated as a whole (`{ data, meta }`), not just `data`. */
     patchWithMeta: <T extends z.ZodType>(path: string, responseSchema: T, body: unknown) =>
       requestBody(path, responseSchema, withBody('PATCH', body)),
@@ -136,5 +138,8 @@ export function createApiClient(options: ApiClientOptions) {
     delete: async (path: string): Promise<void> => {
       await execute(path, { method: 'DELETE' });
     },
+    /** DELETE that answers with a body (`{ data }`). */
+    deleteWithBody: <T extends z.ZodType>(path: string, schema: T) =>
+      request(path, schema, { method: 'DELETE' }),
   };
 }

@@ -20,7 +20,7 @@ export function FormField({
         {...inputProps}
       />
       {error ? (
-        <p id={messageId} className="text-xs text-destructive">
+        <p id={messageId} className="text-xs font-semibold text-status-down-fg">
           {error}
         </p>
       ) : hint ? (

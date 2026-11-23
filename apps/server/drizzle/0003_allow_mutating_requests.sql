@@ -1,0 +1,1 @@
+ALTER TABLE "monitors" ADD COLUMN "allow_mutating_requests" boolean DEFAULT false NOT NULL;

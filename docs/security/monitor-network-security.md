@@ -5,9 +5,10 @@ server-side request forgery (SSRF) primitive: it could reach the cloud metadata 
 admin panels or other private networks. This document records what is enforced today, at
 monitor **registration**, and what the monitoring **executor** must enforce when it is built.
 
-> **Status:** the monitoring executor does not exist yet. No outbound health-check request is ever
-> made by the current code. Full DNS/SSRF runtime protection is **BLOCKED** until the executor is
-> implemented and tested against the requirements in §3.
+> **Status (Phase 3):** the executor, its SSRF-safe transport and the monitoring worker that runs
+> scheduled and manual checks are implemented. The safe transport is mandatory in every
+> environment; there is no switch to disable it. Network-level egress restrictions remain a
+> deployment task (section 6).
 
 ## 1. Enforced at registration (implemented)
 
@@ -91,6 +92,55 @@ address to the user, and logs must use `sanitizeUrlForLog` (no query strings or 
 | Registration-time URL, IP literal and hostname checks                 | PASS (unit tests in `monitor-url.test.ts`)                                            |
 | Standard-ports-only policy, API-enforced                              | PASS (unit and route tests); integration test written, BLOCKED (needs Docker)         |
 | Origin-change confirmation and credential removal                     | PASS (service and route unit tests); integration test written, BLOCKED (needs Docker) |
-| Connection-time DNS validation, address pinning, rebinding protection | BLOCKED — monitoring executor not implemented                                         |
-| Redirect policy                                                       | BLOCKED — monitoring executor not implemented                                         |
+| Connection-time DNS validation, address pinning, rebinding protection | PASS (unit: injected resolver and socket factory; local test servers)                 |
+| Redirect policy                                                       | PASS (unit: 3xx recorded, never followed)                                             |
+| Safe transport required in every environment (no NODE_ENV reliance)   | PASS (unit: a MockAgent or plain Agent is refused with `OUTBOUND_DISABLED`)           |
+| Test doubles unreachable from runtime code                            | PASS (ESLint `no-restricted-imports` on `apps/server/src`, outside tests)             |
+| Worker refuses to start without the safe transport                    | Implemented (`worker.ts` exits 1); not runtime-verified (needs a fault to trigger)    |
+| SSRF refusals recorded but health-neutral                             | PASS (unit and worker end-to-end); integration test written, BLOCKED (needs Docker)   |
 | Network-level egress restrictions                                     | BLOCKED — no production deployment yet                                                |
+
+## 5. Implementation (Phase 3.3)
+
+- **Classifier:** `packages/shared/src/ip-address.ts`, shared with registration checks. IPv6 is allowlisted to global unicast (2000::/3) minus known non-public blocks; IPv4-mapped addresses are judged by their IPv4 address.
+- **Connector:** `createSafeConnector` refuses non-HTTP(S) schemes, ports other than 80/443, Unix sockets and pre-opened sockets; classifies IP literals directly; resolves hostnames (all A and AAAA records, CNAMEs followed by the resolver) and refuses the hostname if any answer is non-public; then opens the socket to the validated IP itself, so Node performs no lookup.
+- **TLS:** `tlsOptionsFor` connects to the IP with `servername` set to the original hostname and `rejectUnauthorized: true`; Node checks the certificate against that hostname. There is no option to disable verification.
+- **Per connection:** every new socket repeats resolution and validation, so DNS rebinding between connections is caught.
+- **Proxies and redirects:** the transport is a plain undici `Agent` (no `EnvHttpProxyAgent`, no redirect or retry interceptors) passed explicitly to every request; proxy environment variables have no effect.
+- **Production wiring:** `createProductionTransport()` returns the safe transport, or `OUTBOUND_DISABLED` if it cannot be built; the worker exits at startup if it gets `OUTBOUND_DISABLED`. In **every** environment (no `NODE_ENV` check) the executor refuses any dispatcher that was not built by `createSafeDispatcher`, so a MockAgent or a plain Agent can never send a check. Tests reach local servers through the same safe dispatcher, with an injected resolver and socket factory (`test-support/local-target.ts`); ESLint forbids runtime code from importing `test-support` or undici's mock classes.
+- **No silent reconnects:** undici treats some connect-time errors (`UND_ERR_SOCKET`, `UND_ERR_INFO`) as retryable and reconnects on its own. The connector converts them into a terminal error (`terminalConnectError`), so one check makes exactly one connection attempt and no request is ever sent twice.
+- **HEAD connections:** undici closes the socket after every HEAD response by default, which races into a TCP reset on some platforms (about 10–30% false `CONNECTION_ERROR`s on Windows loopback in testing). HEAD checks are sent with `reset: false`. Trade-off: a non-compliant server that sends a body with a HEAD response could corrupt the next response on that pooled connection; idle connections are closed after 4 s.
+
+## 6. Application-level and infrastructure-level protections
+
+The two layers are independent; production needs both.
+
+**Application level (implemented in RAIN):**
+
+| Layer        | Protection                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registration | URL rules (scheme, ports 80/443, IP literals, local hostnames, credentials in URLs). Re-applied by the API before a manual check is queued.    |
+| Executor     | Same URL rules again; method policy (POST/PUT/PATCH only with persisted consent); 32 KB request bodies; 64 KB response read limit; no retries. |
+| Transport    | Connection-time DNS validation of every answer, IP pinning, TLS verification with SNI, per-connection revalidation, no proxies, no redirects.  |
+| Worker       | Refuses to start without the safe transport; refusals are recorded as `BLOCKED_DESTINATION` / `CONFIGURATION_ERROR` and never change health.   |
+| Logging      | URLs via `sanitizeUrlForLog`; header values and bodies are never logged; database errors are logged by driver code and message only.           |
+
+**Infrastructure level (deployment tasks, not yet done):**
+
+- Run the worker in its own network segment or container with egress allowed only to the public
+  internet on TCP 80/443.
+- Deny egress to private ranges (RFC 1918, 100.64/10, link-local), the cloud metadata service
+  (169.254.169.254, fd00:ec2::254) and the database's network, except the database port itself.
+- Require IMDSv2 (or the platform equivalent) so metadata needs a token the worker never sends.
+- Give the worker its own database role with only the privileges it needs (`SELECT/UPDATE` on
+  `monitors`, `SELECT` on `monitor_headers`, `INSERT` on `monitor_checks`).
+- Keep the API process without outbound access to monitored hosts: it only queues checks.
+
+An application bug would then still not reach internal networks, and a network misconfiguration
+would still be caught by the application checks.
+
+## 7. Notification webhooks
+
+Webhook destinations are user-chosen too, so they use the same transport, URL rules and
+refusals as monitor checks (see [notifications.md](../notifications.md#ssrf-protection)). The webhook
+sender refuses any dispatcher that is not the SSRF-safe one, and never follows redirects.

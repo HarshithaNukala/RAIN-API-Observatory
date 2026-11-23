@@ -78,6 +78,7 @@ describe('create', () => {
       owner,
       input({
         method: 'POST',
+        allowMutatingRequests: true,
         requestBody: BODY,
         headers: [{ name: 'Authorization', value: SECRET }],
       }),
@@ -128,7 +129,12 @@ describe('update', () => {
     const svc = service();
     const { id } = await svc.create(
       owner,
-      input({ method: 'POST', requestBody: BODY, headers: [{ name: 'X-Key', value: SECRET }] }),
+      input({
+        method: 'POST',
+        allowMutatingRequests: true,
+        requestBody: BODY,
+        headers: [{ name: 'X-Key', value: SECRET }],
+      }),
     );
     const before = { monitor: { ...repo.monitors[0] }, headers: structuredClone(repo.headers) };
 
@@ -150,7 +156,7 @@ describe('update', () => {
   it('re-encrypts a kept body sealed with a retired key using the current key', async () => {
     const { id } = await service(boxV1()).create(
       owner,
-      input({ method: 'POST', requestBody: BODY }),
+      input({ method: 'POST', allowMutatingRequests: true, requestBody: BODY }),
     );
     const oldCiphertext = repo.monitors[0]?.requestBodyCiphertext;
 
@@ -167,7 +173,10 @@ describe('update', () => {
 
   it('leaves a body already on the current key untouched', async () => {
     const svc = service();
-    const { id } = await svc.create(owner, input({ method: 'POST', requestBody: BODY }));
+    const { id } = await svc.create(
+      owner,
+      input({ method: 'POST', allowMutatingRequests: true, requestBody: BODY }),
+    );
     const ciphertext = repo.monitors[0]?.requestBodyCiphertext;
     await svc.update(owner, id, { name: 'Renamed' });
     expect(repo.monitors[0]?.requestBodyCiphertext).toBe(ciphertext);
@@ -175,7 +184,10 @@ describe('update', () => {
 
   it('validates the merged configuration and changes nothing when it is invalid', async () => {
     const svc = service();
-    const { id } = await svc.create(owner, input({ method: 'POST', requestBody: BODY }));
+    const { id } = await svc.create(
+      owner,
+      input({ method: 'POST', allowMutatingRequests: true, requestBody: BODY }),
+    );
     const err = await expectAppError(
       svc.update(owner, id, { method: 'GET' }),
       400,
@@ -183,6 +195,75 @@ describe('update', () => {
     );
     expect(err.details).toEqual([expect.objectContaining({ path: 'requestBody' })]);
     expect(repo.monitors[0]?.method).toBe('POST');
+  });
+});
+
+describe('mutating-request permission', () => {
+  it('stores the permission given at creation and defaults it to false', async () => {
+    const svc = service();
+    const get = await svc.create(owner, input());
+    const post = await svc.create(owner, input({ method: 'POST', allowMutatingRequests: true }));
+    expect(get.allowMutatingRequests).toBe(false);
+    expect(post.allowMutatingRequests).toBe(true);
+    expect(repo.monitors.map((m) => m.allowMutatingRequests)).toEqual([false, true]);
+  });
+
+  it('refuses to switch a monitor to POST without the permission', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    const err = await expectAppError(
+      svc.update(owner, id, { method: 'POST' }),
+      400,
+      'VALIDATION_ERROR',
+    );
+    expect(err.details).toEqual([expect.objectContaining({ path: 'allowMutatingRequests' })]);
+    expect(repo.monitors[0]).toMatchObject({ method: 'GET', allowMutatingRequests: false });
+
+    const { monitor } = await svc.update(owner, id, {
+      method: 'POST',
+      allowMutatingRequests: true,
+    });
+    expect(monitor).toMatchObject({ method: 'POST', allowMutatingRequests: true });
+  });
+
+  it('refuses to withdraw the permission while the method still mutates', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input({ method: 'PUT', allowMutatingRequests: true }));
+    await expectAppError(
+      svc.update(owner, id, { allowMutatingRequests: false }),
+      400,
+      'VALIDATION_ERROR',
+    );
+    const { monitor } = await svc.update(owner, id, {
+      method: 'GET',
+      allowMutatingRequests: false,
+    });
+    expect(monitor).toMatchObject({ method: 'GET', allowMutatingRequests: false });
+  });
+
+  it('never enables the permission on an existing monitor by itself', async () => {
+    // A POST monitor saved before the permission existed: the migration default is false.
+    const svc = service();
+    const { id } = await svc.create(owner, input({ method: 'POST', allowMutatingRequests: true }));
+    repo.monitors[0]!.allowMutatingRequests = false;
+
+    // Any edit must now include the owner's explicit decision; nothing turns it on implicitly.
+    await expectAppError(svc.update(owner, id, { name: 'Renamed' }), 400, 'VALIDATION_ERROR');
+    expect(repo.monitors[0]).toMatchObject({ name: 'Payments', allowMutatingRequests: false });
+    expect((await svc.get(owner, id)).allowMutatingRequests).toBe(false);
+
+    const { monitor } = await svc.update(owner, id, {
+      name: 'Renamed',
+      allowMutatingRequests: true,
+    });
+    expect(monitor).toMatchObject({ name: 'Renamed', allowMutatingRequests: true });
+  });
+
+  it('keeps the permission unchanged when an edit does not mention it', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input({ method: 'PATCH', allowMutatingRequests: true }));
+    const { monitor } = await svc.update(owner, id, { timeoutMs: 4000 });
+    expect(monitor.allowMutatingRequests).toBe(true);
   });
 });
 
@@ -197,6 +278,7 @@ describe('origin change', () => {
       input({
         url: URL_A,
         method: 'POST',
+        allowMutatingRequests: true,
         requestBody: BODY,
         bodyContentType: 'application/json',
         headers: [
@@ -478,5 +560,192 @@ describe('pause and resume', () => {
     const resumed = await svc.resume(owner, id);
     expect(resumed.enabled).toBe(true);
     expect(resumed.nextCheckAt).toEqual(expect.any(String));
+  });
+});
+
+describe('pause and resume during a check', () => {
+  it('keeps an in-flight lease, so a quick pause and resume cannot cause an overlapping claim', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    const lease = { leaseUntil: new Date(Date.now() + 60_000), leaseToken: randomUUID() };
+    Object.assign(repo.monitors[0]!, lease);
+
+    await svc.pause(owner, id);
+    expect(repo.monitors[0]).toMatchObject(lease);
+    await svc.resume(owner, id);
+    expect(repo.monitors[0]).toMatchObject(lease);
+  });
+
+  it('drops a queued manual check when the monitor is paused', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    await svc.requestCheck(owner, id);
+    const paused = await svc.pause(owner, id);
+    expect(paused.manualCheckQueuedAt).toBeNull();
+  });
+});
+
+describe('requestCheck (manual Check Now)', () => {
+  let clock: number;
+  const at = () => new Date(clock);
+  const svcAt = () =>
+    createMonitorService({
+      repository: repo,
+      profiles,
+      secretBox: boxV1(),
+      maxMonitorsPerUser: 25,
+      now: at,
+    });
+
+  beforeEach(() => {
+    clock = Date.parse('2026-11-18T09:00:00.000Z');
+  });
+
+  it('queues the check in the database and returns QUEUED; nothing is sent by the API', async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(owner, input());
+    const updatedAt = repo.monitors[0]!.updatedAt;
+    clock += 5000;
+
+    const queued = await svc.requestCheck(owner, id);
+    expect(queued).toEqual({ monitorId: id, status: 'QUEUED', queuedAt: at().toISOString() });
+    expect(repo.monitors[0]!.manualCheckRequestedAt).toEqual(at());
+    // Queuing a check is not a configuration edit.
+    expect(repo.monitors[0]!.updatedAt).toEqual(updatedAt);
+    expect((await svc.get(owner, id)).manualCheckQueuedAt).toBe(at().toISOString());
+  });
+
+  it("is owner-scoped: someone else's monitor is not found", async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(owner, input());
+    await expectAppError(svc.requestCheck(stranger, id), 404, 'MONITOR_NOT_FOUND');
+    expect(repo.monitors[0]!.manualCheckRequestedAt).toBeNull();
+  });
+
+  it('rejects paused monitors', async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(owner, input());
+    await svc.pause(owner, id);
+    await expectAppError(svc.requestCheck(owner, id), 409, 'MONITOR_PAUSED');
+  });
+
+  it('rejects a second request while one is queued', async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(owner, input());
+    await svc.requestCheck(owner, id);
+    const err = await expectAppError(svc.requestCheck(owner, id), 409, 'CHECK_ALREADY_QUEUED');
+    expect(err.details).toEqual({ queuedAt: at().toISOString() });
+  });
+
+  it('enforces a 10-second cooldown after the last manual check, per monitor', async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(owner, input());
+    const other = await svc.create(owner, input({ name: 'Other' }));
+    repo.monitors[0]!.lastManualCheckAt = at();
+
+    clock += 3000;
+    const err = await expectAppError(svc.requestCheck(owner, id), 429, 'CHECK_COOLDOWN');
+    expect(err.details).toEqual({ retryAfterSeconds: 7 });
+    // Another monitor is unaffected.
+    await expect(svc.requestCheck(owner, other.id)).resolves.toMatchObject({ status: 'QUEUED' });
+
+    clock += 7000;
+    await expect(svc.requestCheck(owner, id)).resolves.toMatchObject({ status: 'QUEUED' });
+  });
+
+  it('refuses to queue a check the worker could only refuse (invalid stored configuration)', async () => {
+    const svc = svcAt();
+    const { id } = await svc.create(
+      owner,
+      input({ method: 'POST', requestBody: '{}', allowMutatingRequests: true }),
+    );
+    // Consent withdrawn behind the API's back (e.g. an older row): the check must not be queued.
+    repo.monitors[0]!.allowMutatingRequests = false;
+    const err = await expectAppError(
+      svc.requestCheck(owner, id),
+      422,
+      'MONITOR_CONFIGURATION_INVALID',
+    );
+    expect(err.details).toEqual([expect.objectContaining({ path: 'allowMutatingRequests' })]);
+
+    repo.monitors[0]!.allowMutatingRequests = true;
+    repo.monitors[0]!.url = 'http://127.0.0.1/admin';
+    const blocked = await expectAppError(
+      svc.requestCheck(owner, id),
+      422,
+      'MONITOR_CONFIGURATION_INVALID',
+    );
+    expect(blocked.details).toEqual([expect.objectContaining({ path: 'url' })]);
+    expect(repo.monitors[0]!.manualCheckRequestedAt).toBeNull();
+  });
+});
+
+describe('listChecks (history)', () => {
+  const addCheck = (monitorId: string, i: number, source: 'SCHEDULED' | 'MANUAL' = 'SCHEDULED') =>
+    repo.checks.push({
+      id: randomUUID(),
+      monitorId,
+      attemptId: randomUUID(),
+      source,
+      checkedAt: new Date(Date.parse('2026-11-18T09:00:00.000Z') + i * 60_000),
+      outcome: 'SUCCESS',
+      statusCode: 200,
+      latencyMs: 100 + i,
+      failureReason: null,
+      errorMessage: null,
+      createdAt: new Date(),
+    });
+
+  it('pages newest first with a cursor and returns only safe fields', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    for (let i = 0; i < 5; i++) addCheck(id, i);
+
+    const first = await svc.listChecks(owner, id, { limit: 2 });
+    expect(first.items.map((c) => c.latencyMs)).toEqual([104, 103]);
+    expect(Object.keys(first.items[0]!).sort()).toEqual(
+      [
+        'checkedAt',
+        'errorMessage',
+        'failureReason',
+        'id',
+        'latencyMs',
+        'outcome',
+        'source',
+        'statusCode',
+      ].sort(),
+    );
+    const second = await svc.listChecks(owner, id, { limit: 2, cursor: first.nextCursor! });
+    expect(second.items.map((c) => c.latencyMs)).toEqual([102, 101]);
+    const third = await svc.listChecks(owner, id, { limit: 2, cursor: second.nextCursor! });
+    expect(third.items.map((c) => c.latencyMs)).toEqual([100]);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it('filters by source', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    addCheck(id, 0, 'SCHEDULED');
+    addCheck(id, 1, 'MANUAL');
+    const manual = await svc.listChecks(owner, id, { limit: 25, source: 'MANUAL' });
+    expect(manual.items).toHaveLength(1);
+    expect(manual.items[0]!.source).toBe('MANUAL');
+  });
+
+  it("answers 404 for someone else's monitor, even when it has checks", async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    addCheck(id, 0);
+    await expectAppError(svc.listChecks(stranger, id, { limit: 25 }), 404, 'MONITOR_NOT_FOUND');
+  });
+
+  it('rejects a malformed cursor', async () => {
+    const svc = service();
+    const { id } = await svc.create(owner, input());
+    await expectAppError(
+      svc.listChecks(owner, id, { limit: 25, cursor: 'garbage' }),
+      400,
+      'VALIDATION_ERROR',
+    );
   });
 });

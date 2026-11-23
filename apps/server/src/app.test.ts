@@ -1,3 +1,6 @@
+import { stubStatusPageService } from './test-support/status-page-service-stub.js';
+import { stubNotificationService } from './test-support/notification-service-stub.js';
+import { stubAnalyticsService } from './test-support/analytics-service-stub.js';
 import { randomUUID } from 'node:crypto';
 import {
   ApiErrorSchema,
@@ -13,6 +16,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp, type AppDependencies } from './app.js';
 import { createTokenVerifier } from './auth/verify-token.js';
 import type { ProfileStore } from './db/profiles.js';
+import { stubIncidentService } from './test-support/incident-service-stub.js';
 import { stubMonitorService } from './test-support/monitor-service-stub.js';
 import { TEST_AUDIENCE, TEST_ISSUER, createTestSigner } from './test-support/tokens.js';
 
@@ -51,6 +55,10 @@ function buildApp(overrides: Partial<AppDependencies> = {}) {
     }),
     profiles,
     monitors: stubMonitorService(),
+    incidents: stubIncidentService(),
+    analytics: stubAnalyticsService(),
+    notifications: stubNotificationService(),
+    statusPages: stubStatusPageService(),
     readiness: async () => ({ database: 'ok', auth: 'ok' }),
     ...overrides,
   });

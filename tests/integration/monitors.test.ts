@@ -114,6 +114,7 @@ describe('create', () => {
         '/api/v1/monitors',
         basic({
           method: 'POST',
+          allowMutatingRequests: true,
           requestBody: BODY_SECRET,
           headers: [
             { name: 'Authorization', value: SECRET },
@@ -141,6 +142,7 @@ describe('create', () => {
   it('stores header values and the request body only as AES-256-GCM ciphertext', async () => {
     const monitor = await createMonitor(alice, {
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: BODY_SECRET,
       headers: [
         { name: 'Authorization', value: SECRET },
@@ -184,6 +186,7 @@ describe('create', () => {
     const monitor = await createMonitor(alice, {
       url: 'https://api.example.com/v1/ping?tenant=acme-internal-id',
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: BODY_SECRET,
       headers: [{ name: 'Authorization', value: SECRET }],
     });
@@ -260,8 +263,8 @@ describe('create', () => {
     ],
     [
       'an oversized body',
-      { method: 'POST', requestBody: 'x'.repeat(64 * 1024 + 1) },
-      /requestBody: .*64 KB/,
+      { method: 'POST', allowMutatingRequests: true, requestBody: 'x'.repeat(32 * 1024 + 1) },
+      /requestBody: .*32 KB/,
     ],
   ])('rejects %s with 400 and creates nothing', async (_label, override, expected) => {
     const carol = await h.createUser();
@@ -279,7 +282,8 @@ describe('create', () => {
         '/api/v1/monitors',
         basic({
           method: 'PUT',
-          requestBody: 'x'.repeat(64 * 1024),
+          allowMutatingRequests: true,
+          requestBody: 'x'.repeat(32 * 1024),
           headers: Array.from({ length: 20 }, (_, i) => ({
             name: `X-H${i}`,
             value: 'v'.repeat(1500),
@@ -503,6 +507,7 @@ describe('update', () => {
   it('keeps the request body when omitted, replaces it when given, removes it on null', async () => {
     const monitor = await createMonitor(alice, {
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: BODY_SECRET,
       bodyContentType: 'application/vnd.api+json',
     });
@@ -540,6 +545,7 @@ describe('update', () => {
   it('validates the merged configuration, not just the patch', async () => {
     const monitor = await createMonitor(alice, {
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: '{}',
       timeoutMs: 5000,
       latencyThresholdMs: 4000,
@@ -589,6 +595,7 @@ describe('origin change', () => {
   const withSecrets = () =>
     createMonitor(alice, {
       method: 'POST',
+      allowMutatingRequests: true,
       requestBody: BODY_SECRET,
       bodyContentType: 'application/json',
       headers: [{ name: 'Authorization', value: SECRET }],
@@ -803,9 +810,10 @@ describe('pause and resume', () => {
     alice = await h.createUser();
   });
 
-  it('toggle enabled without touching health status, counters or check history', async () => {
+  it('toggle enabled without touching health status, counters, check history or a live lease', async () => {
     const monitor = await createMonitor(alice);
-    // Simulate state a future monitoring engine would have written.
+    // Simulate state the monitoring engine writes, including a check in flight.
+    const lease = { leaseUntil: new Date(Date.now() + 60_000), leaseToken: randomUUID() };
     const checkedAt = new Date('2026-11-01T10:00:00.000Z');
     await h.db
       .update(monitors)
@@ -813,7 +821,7 @@ describe('pause and resume', () => {
         currentStatus: 'DOWN',
         consecutiveFailures: 3,
         lastCheckedAt: checkedAt,
-        leaseUntil: new Date(Date.now() + 60_000),
+        ...lease,
         nextCheckAt: new Date('2026-11-01T10:05:00.000Z'),
       })
       .where(eq(monitors.id, monitor.id));
@@ -829,7 +837,8 @@ describe('pause and resume', () => {
       currentStatus: 'DOWN',
       consecutiveFailures: 3,
       consecutiveSuccesses: 0,
-      leaseUntil: null,
+      // The in-flight check keeps its lease; completion sees the pause and leaves health alone.
+      ...lease,
     });
 
     const before = Date.now();
@@ -981,6 +990,7 @@ describe('list', () => {
         await createMonitor(user, {
           name,
           method: 'POST',
+          allowMutatingRequests: true,
           requestBody: BODY_SECRET,
           headers: [{ name: 'Authorization', value: SECRET }],
         }),

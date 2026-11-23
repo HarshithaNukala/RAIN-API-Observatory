@@ -14,6 +14,7 @@ export function client(app: Express) {
     get: (path: string) => http.get(path).agent(keepAlive),
     post: (path: string) => http.post(path).agent(keepAlive),
     patch: (path: string) => http.patch(path).agent(keepAlive),
+    put: (path: string) => http.put(path).agent(keepAlive),
     delete: (path: string) => http.delete(path).agent(keepAlive),
   };
 }

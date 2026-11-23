@@ -2,10 +2,19 @@ import { randomUUID } from 'node:crypto';
 import {
   HEADER_LIMITS,
   HEADERS_TOO_LARGE_MESSAGE,
+  MANUAL_CHECK_COOLDOWN_MS,
   findMonitorConfigIssues,
+  findMonitorUrlIssue,
   headerBytes,
   resolveBodyContentType,
+  type CheckFailureReason,
   type CreateMonitor,
+  type ManualCheckQueued,
+  type MonitorCheck,
+  type MonitorCheckList,
+  type MonitorCheckListQuery,
+  type MonitorCheckOutcome,
+  type MonitorCheckSource,
   type Monitor,
   type MonitorHeaderSummary,
   type MonitorHeaderUpdate,
@@ -21,7 +30,7 @@ import {
 } from '@rain/shared';
 import type { SealedSecret, SecretBox } from '../crypto/secret-box.js';
 import type { ProfileStore } from '../db/profiles.js';
-import type { MonitorHeaderRow, MonitorRow } from '../db/schema.js';
+import type { MonitorCheckRow, MonitorHeaderRow, MonitorRow } from '../db/schema.js';
 import { AppError } from '../errors.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
 import type {
@@ -31,6 +40,7 @@ import type {
   MonitorRepository,
   MonitorSummaryRow,
 } from './monitor-repository.js';
+import { bodyContext, headerContext } from './secret-contexts.js';
 
 export interface MonitorUpdateResult {
   monitor: Monitor;
@@ -46,6 +56,13 @@ export interface MonitorService {
   pause(ownerId: string, monitorId: string): Promise<Monitor>;
   resume(ownerId: string, monitorId: string): Promise<Monitor>;
   remove(ownerId: string, monitorId: string): Promise<void>;
+  /** Queues a manual check for the worker. Never sends a request itself. */
+  requestCheck(ownerId: string, monitorId: string): Promise<ManualCheckQueued>;
+  listChecks(
+    ownerId: string,
+    monitorId: string,
+    query: MonitorCheckListQuery,
+  ): Promise<MonitorCheckList>;
 }
 
 export interface MonitorServiceDependencies {
@@ -73,10 +90,19 @@ export const originChangeConfirmationRequired = () =>
     'Changing the destination will remove the saved request headers and request body, because they were entered for the current destination. Send confirmOriginChange: true to proceed, then enter them again for the new destination.',
   );
 
-// Encryption contexts tie each ciphertext to the row it was written for.
-const bodyContext = (monitorId: string) => `monitor-body:${monitorId}`;
-const headerContext = (monitorId: string, name: string) =>
-  `monitor-header:${monitorId}:${name.toLowerCase()}`;
+/** The only shape a check leaves the service in: outcome and safe, sanitised details. */
+function toCheck(row: MonitorCheckRow): MonitorCheck {
+  return {
+    id: row.id,
+    checkedAt: row.checkedAt.toISOString(),
+    source: row.source as MonitorCheckSource,
+    outcome: row.outcome as MonitorCheckOutcome,
+    statusCode: row.statusCode,
+    latencyMs: row.latencyMs,
+    failureReason: row.failureReason as CheckFailureReason | null,
+    errorMessage: row.errorMessage,
+  };
+}
 
 function toSummary(row: MonitorSummaryRow): MonitorSummary {
   return {
@@ -89,11 +115,15 @@ function toSummary(row: MonitorSummaryRow): MonitorSummary {
     timeoutMs: row.timeoutMs,
     latencyThresholdMs: row.latencyThresholdMs,
     checkIntervalSeconds: row.checkIntervalSeconds,
+    allowMutatingRequests: row.allowMutatingRequests,
     enabled: row.enabled,
     currentStatus: row.currentStatus as MonitorStatus,
     lastCheckedAt: row.lastCheckedAt?.toISOString() ?? null,
     // A paused monitor has no upcoming check; the stored value is only the scheduler's bookkeeping.
     nextCheckAt: row.enabled ? row.nextCheckAt.toISOString() : null,
+    statusChangedAt: row.statusChangedAt?.toISOString() ?? null,
+    manualCheckQueuedAt: row.manualCheckRequestedAt?.toISOString() ?? null,
+    lastManualCheckAt: row.lastManualCheckAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -176,9 +206,12 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
   ): Promise<Monitor> {
     return repository.transaction(async (tx) => {
       // Health status and counters are left alone: pausing or resuming is not a check result.
+      // The worker lease is NOT touched: a check in flight keeps its lease until it completes, so
+      // a quick pause/resume can't let a second worker claim the monitor while it is running. The
+      // completing worker sees the pause and records the check without changing health.
       const changes: MonitorChanges = enabled
-        ? { enabled: true, nextCheckAt: now(), leaseUntil: null }
-        : { enabled: false, leaseUntil: null };
+        ? { enabled: true, nextCheckAt: now() }
+        : { enabled: false, manualCheckRequestedAt: null };
       const row = await tx.update(ownerId, monitorId, changes);
       if (!row) throw monitorNotFound();
       return toMonitor(row, await tx.listHeaders(ownerId, monitorId));
@@ -211,6 +244,7 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
           timeoutMs: input.timeoutMs,
           latencyThresholdMs: input.latencyThresholdMs,
           checkIntervalSeconds: input.checkIntervalSeconds,
+          allowMutatingRequests: input.allowMutatingRequests,
           ...sealBody(id, input.requestBody),
           bodyContentType: resolveBodyContentType(input.requestBody, input.bodyContentType),
           // Due immediately once a monitoring engine exists; no check result is invented here.
@@ -302,6 +336,7 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
           latencyThresholdMs: patch.latencyThresholdMs ?? current.latencyThresholdMs,
           requestBody,
           bodyContentType: declaredContentType,
+          allowMutatingRequests: patch.allowMutatingRequests ?? current.allowMutatingRequests,
         });
         if (issues.length > 0) throw validationError(issues);
 
@@ -319,6 +354,9 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
           }),
           ...(patch.checkIntervalSeconds !== undefined && {
             checkIntervalSeconds: patch.checkIntervalSeconds,
+          }),
+          ...(patch.allowMutatingRequests !== undefined && {
+            allowMutatingRequests: patch.allowMutatingRequests,
           }),
           ...((bodyChanged || rewrapBody || clearSaved) && sealBody(monitorId, requestBody)),
           bodyContentType: resolveBodyContentType(requestBody, declaredContentType),
@@ -394,6 +432,96 @@ export function createMonitorService(deps: MonitorServiceDependencies): MonitorS
     pause: (ownerId, monitorId) => setEnabled(ownerId, monitorId, false),
 
     resume: (ownerId, monitorId) => setEnabled(ownerId, monitorId, true),
+
+    async requestCheck(ownerId, monitorId) {
+      return repository.transaction(async (tx) => {
+        // The row lock serialises concurrent Check Now clicks for this monitor.
+        const row = await tx.findById(ownerId, monitorId, { forUpdate: true });
+        if (!row) throw monitorNotFound();
+        if (!row.enabled) {
+          throw new AppError(
+            409,
+            'MONITOR_PAUSED',
+            'This monitor is paused. Resume it to run checks.',
+          );
+        }
+        if (row.manualCheckRequestedAt) {
+          throw new AppError(
+            409,
+            'CHECK_ALREADY_QUEUED',
+            'A manual check for this monitor is already queued.',
+            {
+              queuedAt: row.manualCheckRequestedAt.toISOString(),
+            },
+          );
+        }
+        const at = now();
+        if (row.lastManualCheckAt) {
+          const waitMs = row.lastManualCheckAt.getTime() + MANUAL_CHECK_COOLDOWN_MS - at.getTime();
+          if (waitMs > 0) {
+            throw new AppError(
+              429,
+              'CHECK_COOLDOWN',
+              `This monitor was checked manually moments ago. Try again in ${Math.ceil(waitMs / 1000)} s.`,
+              { retryAfterSeconds: Math.ceil(waitMs / 1000) },
+            );
+          }
+        }
+        // The same rules the executor applies, so a request that can only be refused isn't queued.
+        const issues = [
+          ...findMonitorConfigIssues({
+            method: row.method as MonitorMethod,
+            timeoutMs: row.timeoutMs,
+            latencyThresholdMs: row.latencyThresholdMs,
+            requestBody: row.requestBodyCiphertext === null ? null : '(stored)',
+            bodyContentType: row.bodyContentType,
+            allowMutatingRequests: row.allowMutatingRequests,
+          }),
+          ...(() => {
+            const issue = findMonitorUrlIssue(row.url);
+            return issue ? [{ path: 'url', message: issue.message }] : [];
+          })(),
+        ];
+        if (issues.length > 0) {
+          throw new AppError(
+            422,
+            'MONITOR_CONFIGURATION_INVALID',
+            "This monitor can't be checked until its configuration is fixed.",
+            issues,
+          );
+        }
+        await tx.update(ownerId, monitorId, {
+          manualCheckRequestedAt: at,
+          updatedAt: row.updatedAt,
+        });
+        return { monitorId, status: 'QUEUED', queuedAt: at.toISOString() };
+      });
+    },
+
+    async listChecks(ownerId, monitorId, query) {
+      const after = query.cursor ? decodeCursor(query.cursor) : undefined;
+      const { exists, rows } = await repository.transaction(
+        async (tx) => ({
+          exists: (await tx.findById(ownerId, monitorId)) !== undefined,
+          rows: await tx.listChecks(ownerId, monitorId, {
+            source: query.source,
+            limit: query.limit + 1,
+            after: after && { checkedAt: after.createdAt, id: after.id },
+          }),
+        }),
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      );
+      if (!exists) throw monitorNotFound();
+      const page = rows.slice(0, query.limit);
+      const last = page.at(-1);
+      return {
+        items: page.map(toCheck),
+        nextCursor:
+          rows.length > query.limit && last
+            ? encodeCursor({ createdAt: last.checkedAt, id: last.id })
+            : null,
+      };
+    },
 
     async remove(ownerId, monitorId) {
       // monitor_headers rows go with it through ON DELETE CASCADE, in the same statement.

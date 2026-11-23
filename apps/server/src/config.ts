@@ -1,5 +1,14 @@
 import { z } from 'zod';
 import { EncryptionKeyError, parseEncryptionKey } from './crypto/secret-box.js';
+import {
+  DEFAULT_WORKER_SETTINGS,
+  MIN_LEASE_SECONDS,
+  type WorkerSettings,
+} from './monitoring/worker-engine.js';
+import {
+  MIN_DISPATCH_LEASE_SECONDS,
+  type DispatcherSettings,
+} from './notifications/notification-dispatcher.js';
 
 export const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -23,6 +32,71 @@ const commonEnv = z.object({
   DATABASE_URL: postgresUrl,
 });
 
+const encryptionEnv = {
+  ENCRYPTION_KEY: z.string({ error: 'is required (base64-encoded 32-byte key)' }),
+  ENCRYPTION_KEY_VERSION: z.coerce.number().int().min(1).max(32_767).default(1),
+  ENCRYPTION_PREVIOUS_KEYS: z.string().default(''),
+};
+
+/** Email is optional: without both values, emails fail visibly ("not configured"). */
+const emailEnv = {
+  RESEND_API_KEY: z.string().min(10, 'looks too short for a Resend API key').optional(),
+  NOTIFICATION_EMAIL_FROM: z
+    .string()
+    .min(3)
+    .max(320)
+    .regex(/@/, 'must be a sender such as "RAIN <alerts@your-domain.com>"')
+    .optional(),
+};
+
+function emailConfig(parsed: {
+  RESEND_API_KEY?: string | undefined;
+  NOTIFICATION_EMAIL_FROM?: string | undefined;
+}): EmailConfig {
+  return parsed.RESEND_API_KEY && parsed.NOTIFICATION_EMAIL_FROM
+    ? { resend: { apiKey: parsed.RESEND_API_KEY, from: parsed.NOTIFICATION_EMAIL_FROM } }
+    : { resend: null };
+}
+
+const workerEnv = commonEnv.extend({
+  ...encryptionEnv,
+  WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .default(DEFAULT_WORKER_SETTINGS.concurrency),
+  WORKER_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(60_000)
+    .default(DEFAULT_WORKER_SETTINGS.pollIntervalMs),
+  WORKER_LEASE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(
+      MIN_LEASE_SECONDS,
+      `must be at least ${MIN_LEASE_SECONDS} (longest timeout plus a safety margin)`,
+    )
+    .max(3600)
+    .default(DEFAULT_WORKER_SETTINGS.leaseSeconds),
+  WORKER_SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).max(120_000).default(35_000),
+  WORKER_DB_MAX_CONNECTIONS: z.coerce.number().int().min(2).max(100).default(10),
+  ...emailEnv,
+  APP_BASE_URL: z
+    .url({ protocol: /^https?$/, error: 'must be the web app URL, e.g. https://rain.example.com' })
+    .default('http://localhost:5173'),
+  NOTIFY_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(10),
+  NOTIFY_POLL_INTERVAL_MS: z.coerce.number().int().min(200).max(60_000).default(2000),
+  NOTIFY_LEASE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(MIN_DISPATCH_LEASE_SECONDS, `must be at least ${MIN_DISPATCH_LEASE_SECONDS}`)
+    .max(3600)
+    .default(60),
+});
+
 const serverEnv = commonEnv.extend({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   SUPABASE_URL: z.url({ protocol: /^https?$/, error: 'must be an http(s) URL' }),
@@ -33,16 +107,28 @@ const serverEnv = commonEnv.extend({
   SUPABASE_JWT_AUDIENCE: z.string().min(1).default('authenticated'),
   CORS_ORIGINS: z.string().default(''),
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
-  ENCRYPTION_KEY: z.string({ error: 'is required (base64-encoded 32-byte key)' }),
-  ENCRYPTION_KEY_VERSION: z.coerce.number().int().min(1).max(32_767).default(1),
-  ENCRYPTION_PREVIOUS_KEYS: z.string().default(''),
+  ...encryptionEnv,
+  ...emailEnv,
   MAX_MONITORS_PER_USER: z.coerce.number().int().min(1).max(1000).default(25),
 });
 
-export interface WorkerConfig {
+export interface BaseConfig {
   env: NodeEnv;
   logLevel: LogLevel;
   databaseUrl: string;
+}
+
+export interface EmailConfig {
+  /** Present only when both the API key and the sender address are set. */
+  resend: { apiKey: string; from: string } | null;
+}
+
+export interface WorkerConfig extends BaseConfig {
+  encryption: EncryptionConfig;
+  worker: WorkerSettings & { shutdownGraceMs: number; dbMaxConnections: number };
+  email: EmailConfig;
+  appBaseUrl: string;
+  dispatcher: DispatcherSettings;
 }
 
 export interface AuthConfig {
@@ -58,13 +144,15 @@ export interface EncryptionConfig {
   keys: Map<number, Buffer>;
 }
 
-export interface ServerConfig extends WorkerConfig {
+export interface ServerConfig extends BaseConfig {
   port: number;
   auth: AuthConfig;
   corsOrigins: string[];
   trustProxy: number;
   encryption: EncryptionConfig;
   maxMonitorsPerUser: number;
+  /** Whether the worker can send email (shown on the settings page; the key stays server-side). */
+  emailConfigured: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -135,8 +223,35 @@ function parseEncryption(current: string, version: number, previous: string): En
 }
 
 export function loadWorkerConfig(env: Env): WorkerConfig {
-  const parsed = parseOrThrow(commonEnv, env);
-  return { env: parsed.NODE_ENV, logLevel: parsed.LOG_LEVEL, databaseUrl: parsed.DATABASE_URL };
+  const parsed = parseOrThrow(workerEnv, env);
+  const worker = {
+    concurrency: parsed.WORKER_CONCURRENCY,
+    pollIntervalMs: parsed.WORKER_POLL_INTERVAL_MS,
+    leaseSeconds: parsed.WORKER_LEASE_SECONDS,
+    maxBackoffMs: Math.max(DEFAULT_WORKER_SETTINGS.maxBackoffMs, parsed.WORKER_POLL_INTERVAL_MS),
+    shutdownGraceMs: parsed.WORKER_SHUTDOWN_GRACE_MS,
+    // One connection per running check plus one for claiming, within the configured cap.
+    dbMaxConnections: parsed.WORKER_DB_MAX_CONNECTIONS,
+  };
+  return {
+    env: parsed.NODE_ENV,
+    logLevel: parsed.LOG_LEVEL,
+    databaseUrl: parsed.DATABASE_URL,
+    encryption: parseEncryption(
+      parsed.ENCRYPTION_KEY,
+      parsed.ENCRYPTION_KEY_VERSION,
+      parsed.ENCRYPTION_PREVIOUS_KEYS,
+    ),
+    worker,
+    email: emailConfig(parsed),
+    appBaseUrl: parsed.APP_BASE_URL.replace(/\/+$/, ''),
+    dispatcher: {
+      concurrency: parsed.NOTIFY_CONCURRENCY,
+      pollIntervalMs: parsed.NOTIFY_POLL_INTERVAL_MS,
+      leaseSeconds: parsed.NOTIFY_LEASE_SECONDS,
+      maxBackoffMs: Math.max(30_000, parsed.NOTIFY_POLL_INTERVAL_MS),
+    },
+  };
 }
 
 export function loadServerConfig(env: Env): ServerConfig {
@@ -164,5 +279,6 @@ export function loadServerConfig(env: Env): ServerConfig {
       parsed.ENCRYPTION_PREVIOUS_KEYS,
     ),
     maxMonitorsPerUser: parsed.MAX_MONITORS_PER_USER,
+    emailConfigured: emailConfig(parsed).resend !== null,
   };
 }

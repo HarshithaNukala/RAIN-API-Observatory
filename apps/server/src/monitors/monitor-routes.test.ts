@@ -1,3 +1,6 @@
+import { stubStatusPageService } from '../test-support/status-page-service-stub.js';
+import { stubNotificationService } from '../test-support/notification-service-stub.js';
+import { stubAnalyticsService } from '../test-support/analytics-service-stub.js';
 import { randomUUID } from 'node:crypto';
 import { ApiErrorSchema, type Monitor, type MonitorList } from '@rain/shared';
 import { pino } from 'pino';
@@ -6,6 +9,7 @@ import { createApp } from '../app.js';
 import { createTokenVerifier } from '../auth/verify-token.js';
 import { AppError } from '../errors.js';
 import { client } from '../test-support/http.js';
+import { stubIncidentService } from '../test-support/incident-service-stub.js';
 import { stubMonitorService } from '../test-support/monitor-service-stub.js';
 import { TEST_AUDIENCE, TEST_ISSUER, createTestSigner } from '../test-support/tokens.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
@@ -30,10 +34,14 @@ const monitor: Monitor = {
   timeoutMs: 10_000,
   latencyThresholdMs: 2000,
   checkIntervalSeconds: 300,
+  allowMutatingRequests: false,
   enabled: true,
   currentStatus: 'UNKNOWN',
   lastCheckedAt: null,
   nextCheckAt: '2026-11-16T10:00:00.000Z',
+  statusChangedAt: null,
+  manualCheckQueuedAt: null,
+  lastManualCheckAt: null,
   createdAt: '2026-11-16T10:00:00.000Z',
   updatedAt: '2026-11-16T10:00:00.000Z',
   requestBody: null,
@@ -46,7 +54,10 @@ beforeAll(async () => {
   auth = `Bearer ${await signer.sign({ sub: userId })}`;
 });
 
-function appWith(service: Partial<MonitorService>) {
+function appWith(
+  service: Partial<MonitorService>,
+  manualCheckRateLimits?: { perUserPerMinute: number; perIpPerMinute: number },
+) {
   return client(
     createApp({
       logger: pino({ level: 'silent' }),
@@ -59,7 +70,12 @@ function appWith(service: Partial<MonitorService>) {
       }),
       profiles: { ensure: () => Promise.reject(new Error('unused')) },
       monitors: stubMonitorService(service),
+      incidents: stubIncidentService(),
+      analytics: stubAnalyticsService(),
+      notifications: stubNotificationService(),
+      statusPages: stubStatusPageService(),
       readiness: async () => ({ database: 'ok', auth: 'ok' }),
+      ...(manualCheckRateLimits && { manualCheckRateLimits }),
     }),
   );
 }
@@ -291,12 +307,90 @@ describe('monitor routes', () => {
       .expect(200);
     expect(res.headers['cache-control']).toBe('no-store');
   });
+});
 
-  it('does not expose a manual check endpoint', async () => {
-    await appWith({})
+describe('manual check and history routes', () => {
+  const queued = { monitorId, status: 'QUEUED' as const, queuedAt: '2026-11-16T10:00:00.000Z' };
+
+  it('POST /monitors/:id/check queues a check for the authenticated user and returns 202', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const res = await appWith({ requestCheck })
+      .post(`/api/v1/monitors/${monitorId.toUpperCase()}/check`)
+      .set('Authorization', auth)
+      .expect(202);
+    expect(res.body).toEqual({ data: queued });
+    expect(requestCheck).toHaveBeenCalledWith(userId, monitorId);
+  });
+
+  it('requires authentication', async () => {
+    await appWith({}).post(`/api/v1/monitors/${monitorId}/check`).expect(401);
+    await appWith({}).get(`/api/v1/monitors/${monitorId}/checks`).expect(401);
+  });
+
+  it('answers a malformed monitor ID with the same 404 as an unknown one', async () => {
+    const res = await appWith({}).post('/api/v1/monitors/nope/check').set('Authorization', auth);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('MONITOR_NOT_FOUND');
+  });
+
+  it('passes service errors through, with Retry-After for the cooldown', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => {
+      throw new AppError(429, 'CHECK_COOLDOWN', 'Try again in 7 s.', { retryAfterSeconds: 7 });
+    });
+    const res = await appWith({ requestCheck })
       .post(`/api/v1/monitors/${monitorId}/check`)
       .set('Authorization', auth)
-      .expect(404);
+      .expect(429);
+    expect(res.body.error.code).toBe('CHECK_COOLDOWN');
+    expect(res.headers['retry-after']).toBe('7');
+  });
+
+  it('rate-limits manual checks per user', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const app = appWith({ requestCheck }, { perUserPerMinute: 2, perIpPerMinute: 100 });
+    for (let i = 0; i < 2; i++) {
+      await app.post(`/api/v1/monitors/${monitorId}/check`).set('Authorization', auth).expect(202);
+    }
+    const res = await app
+      .post(`/api/v1/monitors/${monitorId}/check`)
+      .set('Authorization', auth)
+      .expect(429);
+    expect(res.body.error).toMatchObject({ code: 'RATE_LIMITED', message: /your account/ });
+    expect(requestCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it('rate-limits manual checks per client IP across users', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const app = appWith({ requestCheck }, { perUserPerMinute: 100, perIpPerMinute: 1 });
+    const other = `Bearer ${await signer.sign({ sub: randomUUID() })}`;
+    await app.post(`/api/v1/monitors/${monitorId}/check`).set('Authorization', auth).expect(202);
+    const res = await app
+      .post(`/api/v1/monitors/${monitorId}/check`)
+      .set('Authorization', other)
+      .expect(429);
+    expect(res.body.error.message).toMatch(/network/);
+  });
+
+  it('GET /monitors/:id/checks validates the query and applies defaults', async () => {
+    const listChecks = vi.fn<MonitorService['listChecks']>(async () => ({
+      items: [],
+      nextCursor: null,
+    }));
+    const app = appWith({ listChecks });
+    const res = await app
+      .get(`/api/v1/monitors/${monitorId}/checks?source=MANUAL`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(res.body).toEqual({ data: { items: [], nextCursor: null } });
+    expect(listChecks).toHaveBeenCalledWith(userId, monitorId, { source: 'MANUAL', limit: 25 });
+
+    for (const bad of ['limit=0', 'limit=101', 'source=CRON']) {
+      const r = await app
+        .get(`/api/v1/monitors/${monitorId}/checks?${bad}`)
+        .set('Authorization', auth);
+      expect(r.status, bad).toBe(400);
+    }
+    expect(listChecks).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -28,7 +28,8 @@ export const MONITOR_LIMITS = {
   latencyThresholdMs: { min: 1, max: 30_000, default: 2000 },
   checkIntervalSeconds: { min: 60, max: 86_400, default: 300 },
   expectedStatusCode: { min: 100, max: 599, default: 200 },
-  requestBodyMaxBytes: 64 * 1024,
+  // Also the executor's hard limit: every saved body can be sent.
+  requestBodyMaxBytes: 32 * 1024,
   bodyContentTypeMaxLength: 150,
   defaultBodyContentType: 'application/json',
   listPageSize: { max: 100, default: 25 },
@@ -116,7 +117,12 @@ const fields = {
   checkIntervalSeconds: boundedInt('Interval', ' seconds', L.checkIntervalSeconds),
   requestBody: MonitorRequestBodySchema,
   bodyContentType: MonitorBodyContentTypeSchema,
+  /** Explicit consent to scheduled POST/PUT/PATCH requests. Never defaults to true. */
+  allowMutatingRequests: z.boolean('Choose whether mutating requests are allowed'),
 };
+
+export const MUTATING_REQUESTS_WARNING =
+  'Scheduled POST, PUT and PATCH requests are sent repeatedly and may create or modify data on the target every time a check runs.';
 
 export interface MonitorRequestShape {
   method: MonitorMethod;
@@ -124,6 +130,7 @@ export interface MonitorRequestShape {
   latencyThresholdMs: number;
   requestBody: string | null;
   bodyContentType: string | null;
+  allowMutatingRequests: boolean;
 }
 
 export interface ConfigIssue {
@@ -155,6 +162,12 @@ export function findMonitorConfigIssues(config: MonitorRequestShape): ConfigIssu
       message: 'Latency threshold must not be longer than the timeout',
     });
   }
+  if (methodAllowsBody(config.method) && !config.allowMutatingRequests) {
+    issues.push({
+      path: 'allowMutatingRequests',
+      message: `${config.method} monitors need explicit permission to send repeated mutating requests`,
+    });
+  }
   return issues;
 }
 
@@ -171,6 +184,7 @@ export const CreateMonitorSchema = z
     timeoutMs: fields.timeoutMs.default(L.timeoutMs.default),
     latencyThresholdMs: fields.latencyThresholdMs.default(L.latencyThresholdMs.default),
     checkIntervalSeconds: fields.checkIntervalSeconds.default(L.checkIntervalSeconds.default),
+    allowMutatingRequests: fields.allowMutatingRequests.default(false),
     headers: MonitorHeaderListSchema.default([]),
   })
   .strict()
@@ -225,10 +239,17 @@ export const MonitorSummarySchema = z.object({
   timeoutMs: z.number().int(),
   latencyThresholdMs: z.number().int(),
   checkIntervalSeconds: z.number().int(),
+  allowMutatingRequests: z.boolean(),
   enabled: z.boolean(),
   currentStatus: MonitorStatusSchema,
   lastCheckedAt: timestamp.nullable(),
   nextCheckAt: timestamp.nullable(),
+  /** When currentStatus last changed; NULL until the first change out of UNKNOWN. */
+  statusChangedAt: timestamp.nullable(),
+  /** Set while a manual check (Check Now) is waiting for a worker. */
+  manualCheckQueuedAt: timestamp.nullable(),
+  /** Time of the most recent completed manual check. */
+  lastManualCheckAt: timestamp.nullable(),
   createdAt: timestamp,
   updatedAt: timestamp,
 });

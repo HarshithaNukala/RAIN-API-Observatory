@@ -10,6 +10,14 @@ import { createProfileStore } from '../../apps/server/src/db/profiles.js';
 import { createLogger } from '../../apps/server/src/logger.js';
 import { createMonitorRepository } from '../../apps/server/src/monitors/monitor-repository.js';
 import { createMonitorService } from '../../apps/server/src/monitors/monitor-service.js';
+import { createAnalyticsRepository } from '../../apps/server/src/analytics/analytics-repository.js';
+import { createAnalyticsService } from '../../apps/server/src/analytics/analytics-service.js';
+import { createNotificationRepository } from '../../apps/server/src/notifications/notification-repository.js';
+import { createNotificationService } from '../../apps/server/src/notifications/notification-service.js';
+import { createStatusPageRepository } from '../../apps/server/src/status-pages/status-page-repository.js';
+import { createStatusPageService } from '../../apps/server/src/status-pages/status-page-service.js';
+import { createIncidentRepository } from '../../apps/server/src/incidents/incident-repository.js';
+import { createIncidentService } from '../../apps/server/src/incidents/incident-service.js';
 import { client } from '../../apps/server/src/test-support/http.js';
 import {
   TEST_AUDIENCE,
@@ -63,6 +71,18 @@ export async function createHarness(options: HarnessOptions = {}) {
     }),
     profiles,
     monitors,
+    incidents: createIncidentService({ repository: createIncidentRepository(database.db) }),
+    analytics: createAnalyticsService({ repository: createAnalyticsRepository(database.db) }),
+    statusPages: createStatusPageService({
+      repository: createStatusPageRepository(database.db),
+      profiles,
+    }),
+    publicRateLimitPerMinute: 100_000,
+    notifications: createNotificationService({
+      repository: createNotificationRepository(database.db),
+      secretBox,
+      emailConfigured: false,
+    }),
     readiness: async () => {
       await database.ping();
       return { database: 'ok', auth: 'ok' };
@@ -73,14 +93,17 @@ export async function createHarness(options: HarnessOptions = {}) {
   /** A row in the stubbed auth.users plus a signed access token for it. */
   async function createUser() {
     const id = randomUUID();
-    await database.db.execute(sql`insert into auth.users (id) values (${id})`);
-    const auth = `Bearer ${await signer.sign({ sub: id, email: `${id.slice(0, 8)}@example.com` })}`;
+    // The same address in auth.users and the token (notifications read it from auth.users).
+    const email = `${id.slice(0, 8)}@example.com`;
+    await database.db.execute(sql`insert into auth.users (id, email) values (${id}, ${email})`);
+    const auth = `Bearer ${await signer.sign({ sub: id, email })}`;
     const http = client(app);
     return {
       id,
       get: (path: string) => http.get(path).set('Authorization', auth),
       post: (path: string, body?: object) => http.post(path).set('Authorization', auth).send(body),
       patch: (path: string, body: object) => http.patch(path).set('Authorization', auth).send(body),
+      put: (path: string, body: object) => http.put(path).set('Authorization', auth).send(body),
       delete: (path: string) => http.delete(path).set('Authorization', auth),
     };
   }

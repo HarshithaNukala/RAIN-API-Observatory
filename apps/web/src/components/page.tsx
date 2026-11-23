@@ -15,17 +15,17 @@ export interface Crumb {
 export function Breadcrumbs({ items }: { items: Crumb[] }) {
   return (
     <nav aria-label="Breadcrumb">
-      <ol className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <ol className="flex flex-wrap items-center gap-1.5 text-xs font-semibold tracking-[0.08em] text-muted-foreground uppercase">
         {items.map((item, i) => (
           <Fragment key={`${item.label}-${i}`}>
-            {i > 0 && <ChevronRight className="size-3.5" aria-hidden />}
+            {i > 0 && <ChevronRight className="size-3.5 opacity-60" aria-hidden />}
             <li className="min-w-0">
               {item.to ? (
-                <Link to={item.to} className="hover:text-foreground">
+                <Link to={item.to} className="transition-colors hover:text-primary">
                   {item.label}
                 </Link>
               ) : (
-                <span aria-current="page" className="block max-w-64 truncate text-foreground">
+                <span aria-current="page" className="block max-w-64 truncate text-foreground/80">
                   {item.label}
                 </span>
               )}
@@ -37,24 +37,45 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
   );
 }
 
+/** Terracotta emphasis inside a page title, e.g. "API Health <Accent>at a Glance</Accent>". */
+export function Accent({ children }: { children: ReactNode }) {
+  return (
+    <span className="bg-linear-to-r from-primary to-[oklch(0.62_0.17_45)] bg-clip-text text-transparent">
+      {children}
+    </span>
+  );
+}
+
 export function PageHeader({
   title,
   description,
   breadcrumbs,
+  eyebrow,
   actions,
 }: {
   title: ReactNode;
   description?: ReactNode;
   breadcrumbs?: Crumb[];
+  /** A small uppercase label above the title (used when there are no breadcrumbs). */
+  eyebrow?: string;
   actions?: ReactNode;
 }) {
   return (
-    <div className="grid gap-3">
+    <div className="grid animate-fade-up gap-3">
       {breadcrumbs && <Breadcrumbs items={breadcrumbs} />}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      {!breadcrumbs && eyebrow && (
+        <p className="text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+          {eyebrow}
+        </p>
+      )}
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight break-words">{title}</h1>
-          {description && <div className="mt-1 text-sm text-muted-foreground">{description}</div>}
+          <h1 className="text-3xl font-bold tracking-tight break-words sm:text-4xl">{title}</h1>
+          {description && (
+            <div className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground sm:text-base">
+              {description}
+            </div>
+          )}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
@@ -74,13 +95,22 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <span className="flex size-12 items-center justify-center rounded-full bg-primary/10">
-        <Icon className="size-5 text-primary" aria-hidden />
+    <div className="flex animate-fade-up flex-col items-center gap-3 px-6 py-16 text-center">
+      <span className="relative flex size-16 items-center justify-center">
+        <span
+          aria-hidden
+          className="absolute inset-0 animate-soft-ping rounded-full bg-primary/15"
+          style={{ animationDuration: '3s' }}
+        />
+        <span className="relative flex size-16 items-center justify-center rounded-full bg-peach">
+          <Icon className="size-7 text-primary" aria-hidden />
+        </span>
       </span>
-      <h2 className="text-base font-semibold">{title}</h2>
-      {children && <div className="max-w-md text-sm text-muted-foreground">{children}</div>}
-      {action && <div className="mt-2">{action}</div>}
+      <h2 className="mt-2 text-lg font-bold">{title}</h2>
+      {children && (
+        <div className="max-w-md text-sm leading-relaxed text-muted-foreground">{children}</div>
+      )}
+      {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }
@@ -98,13 +128,13 @@ export function ErrorState({
   title?: string;
 }) {
   return (
-    <Alert variant="error">
+    <Alert variant="error" className="animate-fade-up">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="font-medium">{title}</p>
+        <div className="min-w-0">
+          <p className="font-bold">{title}</p>
           <p className="text-muted-foreground">{error.message}</p>
           {error instanceof ApiError && error.requestId && (
-            <p className="mt-1 font-mono text-xs text-muted-foreground">
+            <p className="mt-1 font-mono text-xs break-all text-muted-foreground">
               Request ID: {error.requestId}
             </p>
           )}
