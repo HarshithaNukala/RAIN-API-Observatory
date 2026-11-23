@@ -1,0 +1,47 @@
+{
+  "name": "rain-api-observatory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "RAIN API Observatory — API uptime and reliability monitoring",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "workspaces": [
+    "packages/shared",
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @rain/shared",
+    "dev": "npm run build:shared && concurrently -k -n shared,server,web -c magenta,cyan,green \"npm run dev -w @rain/shared\" \"npm run dev -w @rain/server\" \"npm run dev -w @rain/web\"",
+    "dev:worker": "npm run build:shared && npm run dev:worker -w @rain/server",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present && tsc -p tests/tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build:shared && vitest run",
+    "test:integration": "npm run build:shared && vitest run --config vitest.integration.config.ts",
+    "build": "npm run build --workspaces --if-present",
+    "db:generate": "npm run db:generate -w @rain/server",
+    "db:migrate": "npm run db:migrate -w @rain/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@testcontainers/postgresql": "12.2.1",
+    "@types/node": "26.6.6",
+    "@types/supertest": "7.2.1",
+    "concurrently": "10.0.7",
+    "eslint": "10.15.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.8",
+    "globals": "17.14.0",
+    "prettier": "3.10.1",
+    "supertest": "7.3.2",
+    "testcontainers": "12.2.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  }
+}

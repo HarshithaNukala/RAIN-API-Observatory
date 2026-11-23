@@ -1,219 +1,158 @@
-<p align="center">
-  <img src="frontend/public/favicon.svg" alt="RAIN Logo" width="80" />
-</p>
+# RAIN API Observatory
 
-<h1 align="center">RAIN — API Reliability Observatory</h1>
+API uptime and reliability monitoring, rebuilt in TypeScript. This repository replaces the legacy
+Java application (kept read-only at `../RAIN API Observatory` as a reference for business-rule
+migration).
 
-<p align="center">
-  <strong>Know your APIs before your users do.</strong>
-</p>
+**Current state:** monitor management, the monitoring worker (scheduled and manual checks over an
+SSRF-safe transport), automatic incidents, analytics, email/webhook notifications for incidents, and public status pages.
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#tech-stack">Tech Stack</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#api-reference">API Reference</a> •
-  <a href="#contributing">Contributing</a> •
-  <a href="#license">License</a>
-</p>
+## Stack
 
----
+| Area     | Choice                                                                               |
+| -------- | ------------------------------------------------------------------------------------ |
+| Runtime  | Node.js 26 (`.nvmrc`), npm workspaces                                                |
+| Web      | React 19, Vite, React Router, TanStack Query, Tailwind CSS 4, shadcn/ui, Supabase JS |
+| API      | Express 5, Zod, jose (Supabase JWT verification), Helmet, express-rate-limit, Pino   |
+| Database | Supabase Postgres, Drizzle ORM, drizzle-kit                                          |
+| Tests    | Vitest, Supertest, Testcontainers                                                    |
 
-RAIN is a **third-party API reliability monitoring platform** that lets development teams register external APIs, run automated health checks, measure uptime, track latency trends, detect incidents, and surface anomalies — all from a single observatory dashboard.
+## Layout
 
-## Features
-
-| Capability | Description |
-|---|---|
-| **API Registry** | Register, edit, pause, and manage external API endpoints with custom headers and HTTP methods |
-| **Monitoring Engine** | Scheduled health checks with configurable intervals and SSRF-hardened request execution |
-| **Telemetry & Metrics** | Uptime percentage, average/P95 latency, success/failure ratios with time-window bucketing |
-| **Incident Engine** | Automatic incident detection from consecutive failures with pessimistic-lock concurrency safety |
-| **Intelligence Engine** | Anomaly detection, error-type classification, and reliability scoring |
-| **Observatory Dashboard** | Real-time overview with latency charts, success/failure trends, incident feed, and intelligence panels |
-
-## Tech Stack
-
-| Layer | Technologies |
-|---|---|
-| **Frontend** | React 19, TypeScript, Vite, React Router 7, TanStack Query, Recharts, Tailwind CSS, Lucide Icons |
-| **Backend** | Java 21, Spring Boot 3.x, Spring MVC, Spring Data JPA, Spring WebClient, Spring Scheduling |
-| **Database** | PostgreSQL 15, Flyway Migrations |
-| **Infrastructure** | Docker, Docker Compose |
-
-## Quick Start
-
-### Prerequisites
-
-- **Java** 21+
-- **Node.js** 22+ & npm 10+
-- **Docker** & Docker Compose
-- **Git**
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/HarshithaNukala/RAIN-API-Observatory.git
-cd RAIN-API-Observatory
+```
+apps/
+  server/          Express API (src/api.ts) and background worker (src/worker.ts)
+    drizzle/       Generated SQL migrations
+  web/             React single-page app
+packages/
+  shared/          Zod schemas + inferred types shared by web and server (API contracts)
+tests/
+  integration/     Database integration tests (disposable Postgres only)
+  support/         Integration-test safety guard
+docs/              Setup and testing guides
 ```
 
-### 2. Configure environment
+## Getting started
+
+Prerequisites: Node.js 26 and npm 11. Docker is only needed for `npm run test:integration`.
 
 ```bash
-cp .env.example .env
-# The defaults are ready for local development — adjust if needed
-```
-
-### 3. Start the database
-
-```bash
-docker compose up -d
-```
-
-PostgreSQL will be available on port `5432`. The healthcheck ensures it's ready before you proceed.
-
-### 4. Start the backend
-
-```bash
-cd backend
-./mvnw spring-boot:run      # Linux / macOS
-mvnw.cmd spring-boot:run    # Windows
-```
-
-The API server starts on **http://localhost:8080**. Flyway runs all migrations automatically.
-
-### 5. Start the frontend
-
-```bash
-cd frontend
 npm install
+cp .env.example .env    # then fill it in — see docs/supabase-setup.md
+# ENCRYPTION_KEY is required; generate one and paste it into .env:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+npm run db:migrate
 npm run dev
 ```
 
-The dashboard opens on **http://localhost:5173**.
+- Web app: <http://localhost:5173> (proxies `/api`, `/healthz`, `/readyz` to the API)
+- API: <http://localhost:3000>
 
-### 6. Verify
+Without a filled-in `.env`, the API and worker exit with a list of the missing variables, and the
+web app shows a configuration page instead of the login screen.
 
-```bash
-curl http://localhost:8080/api/health
-# → {"status":"UP","timestamp":"..."}
-```
+Run the worker (`npm run dev:worker`) to execute checks, open and resolve incidents, and deliver
+notifications.
 
-## Architecture
+### Notification configuration
 
-RAIN follows a **Modular Monolith** architecture — strict domain separation (Registry, Monitoring, Telemetry, Incidents, Intelligence) within a single deployable unit backed by one PostgreSQL database.
+Incident notifications need these variables (see `.env.example` and
+[docs/notifications.md](docs/notifications.md)):
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   React Frontend                     │
-│  Dashboard · Registry · API Details · Add API        │
-└──────────────────────┬──────────────────────────────┘
-                       │  REST / JSON
-┌──────────────────────▼──────────────────────────────┐
-│                 Spring Boot Backend                  │
-│  ┌──────────┐ ┌───────────┐ ┌───────────────────┐   │
-│  │ Registry │ │ Monitoring│ │ Telemetry/Metrics │   │
-│  └──────────┘ └───────────┘ └───────────────────┘   │
-│  ┌──────────┐ ┌──────────────────────────────────┐   │
-│  │ Incidents│ │      Intelligence Engine         │   │
-│  └──────────┘ └──────────────────────────────────┘   │
-└──────────────────────┬──────────────────────────────┘
-                       │  JDBC / JPA
-┌──────────────────────▼──────────────────────────────┐
-│          PostgreSQL 15 (Flyway-managed)              │
-│  api_services · health_checks · incidents            │
-└─────────────────────────────────────────────────────┘
-```
+| Variable                                                                | Where       | Purpose                                                                   |
+| ----------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------- |
+| `RESEND_API_KEY`                                                        | API, worker | Resend API key. Without it (and a sender), emails are recorded as failed. |
+| `NOTIFICATION_EMAIL_FROM`                                               | API, worker | Sender, e.g. `RAIN <alerts@your-verified-domain.com>`                     |
+| `APP_BASE_URL`                                                          | worker      | Public web app URL, used for the incident link in emails                  |
+| `NOTIFY_CONCURRENCY`, `NOTIFY_POLL_INTERVAL_MS`, `NOTIFY_LEASE_SECONDS` | worker      | Dispatcher tuning (defaults 10, 2000, 60)                                 |
 
-> See [ARCHITECTURE.md](ARCHITECTURE.md) for in-depth design decisions, concurrency strategies, and telemetry formulas.
+Webhooks need no server configuration: each monitor's webhook is set up in the app, and its
+signing secret is generated by RAIN and shown once.
 
-## Project Structure
+## Commands
 
-```
-RAIN-API-Observatory/
-├── backend/
-│   └── src/main/java/com/rain/
-│       ├── config/            # WebClient, CORS configuration
-│       ├── controller/        # REST controllers
-│       ├── dto/               # Request/response DTOs
-│       ├── entity/            # JPA entities & enums
-│       ├── exception/         # Global error handling
-│       ├── intelligence/      # Anomaly detection & scoring
-│       ├── monitoring/        # Health checks, scheduler, SSRF guard
-│       ├── repository/        # Spring Data repositories
-│       └── service/           # Business logic
-├── frontend/src/
-│   ├── components/            # Reusable UI components
-│   ├── pages/                 # Route-level page components
-│   ├── services/              # API client & React Query hooks
-│   └── types/                 # TypeScript type definitions
-├── docs/                      # Additional documentation
-├── infra/                     # Infrastructure configs
-├── scripts/                   # Utility scripts
-├── docker-compose.yml         # PostgreSQL service
-├── ARCHITECTURE.md            # Design & architecture docs
-└── .env.example               # Environment variable template
-```
+Run from the repository root.
 
-## API Reference
+| Command                    | What it does                                                         |
+| -------------------------- | -------------------------------------------------------------------- |
+| `npm install`              | Install all workspaces from the lockfile                             |
+| `npm run dev`              | Shared package watch + API (tsx watch) + web (Vite)                  |
+| `npm run dev:worker`       | Background worker in watch mode                                      |
+| `npm run typecheck`        | `tsc --noEmit` in every workspace and the tests                      |
+| `npm run lint`             | ESLint over the whole repository                                     |
+| `npm run format`           | Prettier write (`format:check` to verify only)                       |
+| `npm run test`             | Unit tests (no network, no database)                                 |
+| `npm run test:integration` | Database tests against a disposable Postgres (Docker or guarded URL) |
+| `npm run build`            | Production build of shared, server and web                           |
+| `npm run db:generate`      | Generate a migration from `apps/server/src/db/schema.ts`             |
+| `npm run db:migrate`       | Apply migrations to `DATABASE_URL`                                   |
 
-### Health
+Production start after `npm run build`: `npm run start -w @rain/server` (API) and
+`npm run start:worker -w @rain/server` (worker).
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/health` | Application health check |
+## API
 
-### API Registry
+All responses are JSON. Success bodies under `/api` are `{ "data": ... }`; every error is
+`{ "error": { "code", "message", "requestId", "details?" } }` (see `packages/shared/src/errors.ts`).
+Every response carries an `X-Request-Id` header.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/services` | List all registered APIs |
-| `GET` | `/api/services/{id}` | Get API details |
-| `POST` | `/api/services` | Register a new API |
-| `PUT` | `/api/services/{id}` | Update an API |
-| `PATCH` | `/api/services/{id}/pause` | Pause monitoring |
-| `PATCH` | `/api/services/{id}/resume` | Resume monitoring |
-| `DELETE` | `/api/services/{id}` | Remove an API |
+| Endpoint                                                       | Auth   | Purpose                                                                                              |
+| -------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| `GET /healthz`                                                 | none   | Process liveness                                                                                     |
+| `GET /readyz`                                                  | none   | Database reachable and configuration loaded; `503` when not ready                                    |
+| `GET /api/v1/me`                                               | Bearer | The signed-in user and their profile (created on first call)                                         |
+| `/api/v1/monitors…`                                            | Bearer | Monitor CRUD, headers, pause/resume: see [docs/monitor-management.md](docs/monitor-management.md)    |
+| `/api/v1/incidents…`                                           | Bearer | Incidents, timeline, acknowledgement: see [docs/incident-management.md](docs/incident-management.md) |
+| `/api/v1/analytics…`, `/api/v1/monitors/:id/metrics`           | Bearer | Analytics: see [docs/metrics-and-analytics.md](docs/metrics-and-analytics.md)                        |
+| `/api/v1/notifications…`, `/api/v1/monitors/:id/notifications` | Bearer | Notification settings and delivery history: see [docs/notifications.md](docs/notifications.md)       |
+| `/api/v1/status-pages…`                                        | Bearer | Status page management: see [docs/public-status-pages.md](docs/public-status-pages.md)               |
+| `GET /api/v1/public/status-pages/:slug`                        | none   | Published status page (rate-limited, never cached)                                                   |
 
-### Metrics & Telemetry
+`/api` routes return `401` for a missing, malformed, invalid or expired token (`TOKEN_EXPIRED`).
+Requests are rate-limited per client IP (120/min) and bodies are capped at 256 kB.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/metrics/dashboard` | Dashboard summary stats |
-| `GET` | `/api/metrics/services/{id}` | Per-API uptime, latency, P95 |
-| `GET` | `/api/metrics/services/{id}/latency-series` | Latency time series |
-| `GET` | `/api/metrics/services/{id}/success-failure-series` | Success/failure time series |
+## Security notes
 
-### Incidents
+- The browser only ever receives `VITE_*` variables: the Supabase URL and publishable key. The
+  web app refuses to start with a secret/service-role key there.
+- The API verifies Supabase access tokens locally with `jose`: JWKS for asymmetric keys, and the
+  optional legacy HS256 secret for older projects. Anon and service-role tokens are rejected.
+- Pino redacts `Authorization`, cookies and secret-looking fields from logs.
+- Every application table (11 of 11) has Row Level Security enabled with no policies, so only
+  the API can access them; the browser never queries the database directly.
+- Monitor header values and request bodies are encrypted at rest with AES-256-GCM using
+  `ENCRYPTION_KEY`. Header values are write-only: no API response returns them. Webhook signing
+  secrets and webhook authentication headers are encrypted the same way.
+- Monitored APIs and notification webhooks are both reached only through the SSRF-safe transport
+  (validated, pinned DNS; ports 80/443; no redirects). See
+  [docs/security/monitor-network-security.md](docs/security/monitor-network-security.md).
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/incidents` | List all incidents |
-| `GET` | `/api/incidents/api/{apiId}` | Incidents for a specific API |
+## Encryption keys
 
-### Intelligence
+`ENCRYPTION_KEY` is a base64-encoded random 32-byte key; the API refuses to start without a valid
+one. Back it up — encrypted values cannot be recovered without it.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/intelligence/services/{id}` | Anomaly detection & reliability analysis |
+To rotate: move the current key into `ENCRYPTION_PREVIOUS_KEYS` as `<version>:<key>`, put a new key
+in `ENCRYPTION_KEY`, and increase `ENCRYPTION_KEY_VERSION`. New writes use the new key, and a
+request body sealed with an older key is re-encrypted with the current key the next time its
+monitor is edited. Header values move to the new key when they are next replaced. Keep a retired
+key configured until no stored value uses its version
+(`select distinct request_body_key_version from monitors` and
+`select distinct encryption_key_version from monitor_headers`); removing it earlier makes those
+values unreadable.
 
-## Database Migrations
+- Integration tests refuse to run against anything but a local or disposable `*_test` database,
+  and never against the legacy `rain_db`.
 
-Flyway migrations are located in `backend/src/main/resources/db/migration/`:
+## More
 
-| Version | Description |
-|---|---|
-| `V1` | Initial schema setup |
-| `V2` | API registry tables |
-| `V3` | Monitoring engine schema |
-| `V4` | Telemetry & metrics indexes |
-| `V5` | Incident engine schema |
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+- [Supabase setup](docs/supabase-setup.md)
+- [Testing](docs/testing.md)
+- [Deployment](docs/deployment.md)
+- [Monitor management](docs/monitor-management.md)
+- [Monitor network security](docs/security/monitor-network-security.md)
+- [Monitoring engine](docs/monitoring-engine.md)
+- [Incident management](docs/incident-management.md)
+- [Metrics and analytics](docs/metrics-and-analytics.md)
+- [Notifications](docs/notifications.md)
+- [Public status pages](docs/public-status-pages.md)

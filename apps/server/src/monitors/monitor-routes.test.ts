@@ -1,0 +1,413 @@
+import { stubStatusPageService } from '../test-support/status-page-service-stub.js';
+import { stubNotificationService } from '../test-support/notification-service-stub.js';
+import { stubAnalyticsService } from '../test-support/analytics-service-stub.js';
+import { randomUUID } from 'node:crypto';
+import { ApiErrorSchema, type Monitor, type MonitorList } from '@rain/shared';
+import { pino } from 'pino';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { createApp } from '../app.js';
+import { createTokenVerifier } from '../auth/verify-token.js';
+import { AppError } from '../errors.js';
+import { client } from '../test-support/http.js';
+import { stubIncidentService } from '../test-support/incident-service-stub.js';
+import { stubMonitorService } from '../test-support/monitor-service-stub.js';
+import { TEST_AUDIENCE, TEST_ISSUER, createTestSigner } from '../test-support/tokens.js';
+import { decodeCursor, encodeCursor } from './cursor.js';
+import {
+  monitorNotFound,
+  originChangeConfirmationRequired,
+  type MonitorService,
+} from './monitor-service.js';
+
+const userId = randomUUID();
+const monitorId = randomUUID();
+let auth: string;
+let signer: Awaited<ReturnType<typeof createTestSigner>>;
+
+const monitor: Monitor = {
+  id: monitorId,
+  name: 'Payments API',
+  description: null,
+  url: 'https://api.example.com/health',
+  method: 'GET',
+  expectedStatusCode: 200,
+  timeoutMs: 10_000,
+  latencyThresholdMs: 2000,
+  checkIntervalSeconds: 300,
+  allowMutatingRequests: false,
+  enabled: true,
+  currentStatus: 'UNKNOWN',
+  lastCheckedAt: null,
+  nextCheckAt: '2026-11-16T10:00:00.000Z',
+  statusChangedAt: null,
+  manualCheckQueuedAt: null,
+  lastManualCheckAt: null,
+  createdAt: '2026-11-16T10:00:00.000Z',
+  updatedAt: '2026-11-16T10:00:00.000Z',
+  requestBody: null,
+  bodyContentType: null,
+  headers: [],
+};
+
+beforeAll(async () => {
+  signer = await createTestSigner();
+  auth = `Bearer ${await signer.sign({ sub: userId })}`;
+});
+
+function appWith(
+  service: Partial<MonitorService>,
+  manualCheckRateLimits?: { perUserPerMinute: number; perIpPerMinute: number },
+) {
+  return client(
+    createApp({
+      logger: pino({ level: 'silent' }),
+      corsOrigins: [],
+      trustProxy: 0,
+      verifyAccessToken: createTokenVerifier({
+        issuer: TEST_ISSUER,
+        audience: TEST_AUDIENCE,
+        jwks: signer.jwks,
+      }),
+      profiles: { ensure: () => Promise.reject(new Error('unused')) },
+      monitors: stubMonitorService(service),
+      incidents: stubIncidentService(),
+      analytics: stubAnalyticsService(),
+      notifications: stubNotificationService(),
+      statusPages: stubStatusPageService(),
+      readiness: async () => ({ database: 'ok', auth: 'ok' }),
+      ...(manualCheckRateLimits && { manualCheckRateLimits }),
+    }),
+  );
+}
+
+describe('monitor routes', () => {
+  it('POST /monitors validates, passes the authenticated user ID, and returns 201 + Location', async () => {
+    const create = vi.fn<MonitorService['create']>(async () => monitor);
+    const res = await appWith({ create })
+      .post('/api/v1/monitors')
+      .set('Authorization', auth)
+      .send({ name: '  Payments API ', url: 'https://api.example.com/health' })
+      .expect(201);
+
+    expect(res.headers.location).toBe(`/api/v1/monitors/${monitorId}`);
+    expect(res.body).toEqual({ data: monitor });
+    expect(create).toHaveBeenCalledWith(
+      userId,
+      expect.objectContaining({
+        name: 'Payments API',
+        method: 'GET',
+        timeoutMs: 10_000,
+        headers: [],
+      }),
+    );
+  });
+
+  it('rejects invalid input with field details before reaching the service', async () => {
+    const create = vi.fn<MonitorService['create']>();
+    const res = await appWith({ create })
+      .post('/api/v1/monitors')
+      .set('Authorization', auth)
+      .send({ name: '', url: 'http://10.0.0.1/', checkIntervalSeconds: 5 })
+      .expect(400);
+
+    const { code, details } = ApiErrorSchema.parse(res.body).error;
+    expect(code).toBe('VALIDATION_ERROR');
+    expect((details as Array<{ path: string }>).map((d) => d.path).sort()).toEqual([
+      'checkIntervalSeconds',
+      'name',
+      'url',
+    ]);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing or non-object body', async () => {
+    const create = vi.fn<MonitorService['create']>();
+    await appWith({ create }).post('/api/v1/monitors').set('Authorization', auth).expect(400);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('GET /monitors parses filters from the query string', async () => {
+    const list = vi.fn<MonitorService['list']>(async (): Promise<MonitorList> => ({
+      items: [],
+      nextCursor: null,
+      total: 0,
+      quota: { used: 0, limit: 25 },
+    }));
+    await appWith({ list })
+      .get('/api/v1/monitors?search=%20pay%20&state=paused&status=DOWN&limit=10')
+      .set('Authorization', auth)
+      .expect(200);
+    expect(list).toHaveBeenCalledWith(userId, {
+      search: 'pay',
+      state: 'paused',
+      status: 'DOWN',
+      limit: 10,
+    });
+  });
+
+  it('answers a malformed monitor ID with 404 without calling the service', async () => {
+    const get = vi.fn<MonitorService['get']>();
+    const res = await appWith({ get })
+      .get('/api/v1/monitors/not-a-uuid')
+      .set('Authorization', auth)
+      .expect(404);
+    expect(ApiErrorSchema.parse(res.body).error.code).toBe('MONITOR_NOT_FOUND');
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('maps the service not-found error to the standard 404 body', async () => {
+    const res = await appWith({ get: () => Promise.reject(monitorNotFound()) })
+      .get(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .expect(404);
+    expect(ApiErrorSchema.parse(res.body).error).toMatchObject({
+      code: 'MONITOR_NOT_FOUND',
+      message: 'Monitor not found',
+      requestId: expect.any(String),
+    });
+  });
+
+  it('maps the quota error to 409', async () => {
+    const res = await appWith({
+      create: () => Promise.reject(new AppError(409, 'MONITOR_LIMIT_REACHED', 'Limit reached')),
+    })
+      .post('/api/v1/monitors')
+      .set('Authorization', auth)
+      .send({ name: 'x', url: 'https://api.example.com/' })
+      .expect(409);
+    expect(ApiErrorSchema.parse(res.body).error.code).toBe('MONITOR_LIMIT_REACHED');
+  });
+
+  it('PATCH /monitors/:id passes only the supplied fields and returns update metadata', async () => {
+    const meta = { originChanged: false, savedConfigurationCleared: false };
+    const update = vi.fn<MonitorService['update']>(async () => ({ monitor, meta }));
+    const res = await appWith({ update })
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ checkIntervalSeconds: 600 })
+      .expect(200);
+    expect(update).toHaveBeenCalledWith(userId, monitorId, { checkIntervalSeconds: 600 });
+    expect(res.body).toEqual({ data: monitor, meta });
+  });
+
+  it('PATCH passes confirmOriginChange through and rejects it as the only field', async () => {
+    const meta = { originChanged: true, savedConfigurationCleared: true };
+    const update = vi.fn<MonitorService['update']>(async () => ({ monitor, meta }));
+    const app = appWith({ update });
+    await app
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ url: 'https://other.example.org/health', confirmOriginChange: true })
+      .expect(200);
+    expect(update).toHaveBeenCalledWith(userId, monitorId, {
+      url: 'https://other.example.org/health',
+      confirmOriginChange: true,
+    });
+
+    const res = await app
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ confirmOriginChange: true })
+      .expect(400);
+    expect(ApiErrorSchema.parse(res.body).error.code).toBe('VALIDATION_ERROR');
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it('maps the origin-change error to a 409 that reveals no secrets', async () => {
+    const update = vi.fn<MonitorService['update']>(async () => {
+      throw originChangeConfirmationRequired();
+    });
+    const res = await appWith({ update })
+      .patch(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .send({ url: 'https://other.example.org/health' })
+      .expect(409);
+    const { error } = ApiErrorSchema.parse(res.body);
+    expect(error.code).toBe('MONITOR_ORIGIN_CHANGE_CONFIRMATION_REQUIRED');
+    expect(error.message).toMatch(/saved request headers and request body/);
+    expect(error.details).toBeUndefined();
+  });
+
+  it.each([
+    ['https with a custom port', 'https://api.example.com:8443/health'],
+    ['http with a custom port', 'http://api.example.com:8080/health'],
+    ['https on port 80', 'https://api.example.com:80/health'],
+  ])('rejects %s with UNSUPPORTED_PORT before reaching the service', async (_label, url) => {
+    const create = vi.fn<MonitorService['create']>();
+    const update = vi.fn<MonitorService['update']>();
+    const app = appWith({ create, update });
+
+    for (const req of [
+      app.post('/api/v1/monitors').send({ name: 'Ported', url }),
+      app.patch(`/api/v1/monitors/${monitorId}`).send({ url }),
+    ]) {
+      const res = await req.set('Authorization', auth).expect(400);
+      const { error } = ApiErrorSchema.parse(res.body);
+      expect(error.code).toBe('UNSUPPORTED_PORT');
+      expect(error.details).toEqual([
+        { path: 'url', message: expect.stringMatching(/standard ports/), code: 'UNSUPPORTED_PORT' },
+      ]);
+    }
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('keeps VALIDATION_ERROR as the top-level code when a port problem is not the only one', async () => {
+    const res = await appWith({})
+      .post('/api/v1/monitors')
+      .set('Authorization', auth)
+      .send({ name: '', url: 'https://api.example.com:8443/' })
+      .expect(400);
+    const { error } = ApiErrorSchema.parse(res.body);
+    expect(error.code).toBe('VALIDATION_ERROR');
+    expect(error.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'url', code: 'UNSUPPORTED_PORT' })]),
+    );
+  });
+
+  it('PATCH /monitors/:id/headers passes explicit upserts and removals', async () => {
+    const updateHeaders = vi.fn<MonitorService['updateHeaders']>(async () => monitor);
+    const res = await appWith({ updateHeaders })
+      .patch(`/api/v1/monitors/${monitorId}/headers`)
+      .set('Authorization', auth)
+      .send({ upsert: [{ name: 'Authorization', value: 'Bearer s3cret' }], remove: ['X-Old'] })
+      .expect(200);
+    expect(updateHeaders).toHaveBeenCalledWith(userId, monitorId, {
+      upsert: [{ name: 'Authorization', value: 'Bearer s3cret' }],
+      remove: ['X-Old'],
+    });
+    expect(res.text).not.toContain('s3cret');
+  });
+
+  it('pause, resume and delete call the service for the authenticated user', async () => {
+    const pause = vi.fn<MonitorService['pause']>(async () => ({ ...monitor, enabled: false }));
+    const resume = vi.fn<MonitorService['resume']>(async () => monitor);
+    const remove = vi.fn<MonitorService['remove']>(async () => {});
+    const http = appWith({ pause, resume, remove });
+
+    const paused = await http
+      .post(`/api/v1/monitors/${monitorId}/pause`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(paused.body.data.enabled).toBe(false);
+    await http.post(`/api/v1/monitors/${monitorId}/resume`).set('Authorization', auth).expect(200);
+    const deleted = await http
+      .delete(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .expect(204);
+    expect(deleted.text).toBe('');
+
+    for (const fn of [pause, resume, remove]) expect(fn).toHaveBeenCalledWith(userId, monitorId);
+  });
+
+  it('marks every response as uncacheable', async () => {
+    const res = await appWith({ get: async () => monitor })
+      .get(`/api/v1/monitors/${monitorId}`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+});
+
+describe('manual check and history routes', () => {
+  const queued = { monitorId, status: 'QUEUED' as const, queuedAt: '2026-11-16T10:00:00.000Z' };
+
+  it('POST /monitors/:id/check queues a check for the authenticated user and returns 202', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const res = await appWith({ requestCheck })
+      .post(`/api/v1/monitors/${monitorId.toUpperCase()}/check`)
+      .set('Authorization', auth)
+      .expect(202);
+    expect(res.body).toEqual({ data: queued });
+    expect(requestCheck).toHaveBeenCalledWith(userId, monitorId);
+  });
+
+  it('requires authentication', async () => {
+    await appWith({}).post(`/api/v1/monitors/${monitorId}/check`).expect(401);
+    await appWith({}).get(`/api/v1/monitors/${monitorId}/checks`).expect(401);
+  });
+
+  it('answers a malformed monitor ID with the same 404 as an unknown one', async () => {
+    const res = await appWith({}).post('/api/v1/monitors/nope/check').set('Authorization', auth);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('MONITOR_NOT_FOUND');
+  });
+
+  it('passes service errors through, with Retry-After for the cooldown', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => {
+      throw new AppError(429, 'CHECK_COOLDOWN', 'Try again in 7 s.', { retryAfterSeconds: 7 });
+    });
+    const res = await appWith({ requestCheck })
+      .post(`/api/v1/monitors/${monitorId}/check`)
+      .set('Authorization', auth)
+      .expect(429);
+    expect(res.body.error.code).toBe('CHECK_COOLDOWN');
+    expect(res.headers['retry-after']).toBe('7');
+  });
+
+  it('rate-limits manual checks per user', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const app = appWith({ requestCheck }, { perUserPerMinute: 2, perIpPerMinute: 100 });
+    for (let i = 0; i < 2; i++) {
+      await app.post(`/api/v1/monitors/${monitorId}/check`).set('Authorization', auth).expect(202);
+    }
+    const res = await app
+      .post(`/api/v1/monitors/${monitorId}/check`)
+      .set('Authorization', auth)
+      .expect(429);
+    expect(res.body.error).toMatchObject({ code: 'RATE_LIMITED', message: /your account/ });
+    expect(requestCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it('rate-limits manual checks per client IP across users', async () => {
+    const requestCheck = vi.fn<MonitorService['requestCheck']>(async () => queued);
+    const app = appWith({ requestCheck }, { perUserPerMinute: 100, perIpPerMinute: 1 });
+    const other = `Bearer ${await signer.sign({ sub: randomUUID() })}`;
+    await app.post(`/api/v1/monitors/${monitorId}/check`).set('Authorization', auth).expect(202);
+    const res = await app
+      .post(`/api/v1/monitors/${monitorId}/check`)
+      .set('Authorization', other)
+      .expect(429);
+    expect(res.body.error.message).toMatch(/network/);
+  });
+
+  it('GET /monitors/:id/checks validates the query and applies defaults', async () => {
+    const listChecks = vi.fn<MonitorService['listChecks']>(async () => ({
+      items: [],
+      nextCursor: null,
+    }));
+    const app = appWith({ listChecks });
+    const res = await app
+      .get(`/api/v1/monitors/${monitorId}/checks?source=MANUAL`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(res.body).toEqual({ data: { items: [], nextCursor: null } });
+    expect(listChecks).toHaveBeenCalledWith(userId, monitorId, { source: 'MANUAL', limit: 25 });
+
+    for (const bad of ['limit=0', 'limit=101', 'source=CRON']) {
+      const r = await app
+        .get(`/api/v1/monitors/${monitorId}/checks?${bad}`)
+        .set('Authorization', auth);
+      expect(r.status, bad).toBe(400);
+    }
+    expect(listChecks).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('pagination cursor', () => {
+  it('round-trips a position exactly', () => {
+    const cursor = { createdAt: new Date('2026-11-16T10:00:00.123Z'), id: monitorId };
+    expect(decodeCursor(encodeCursor(cursor))).toEqual(cursor);
+  });
+
+  it.each([
+    '',
+    'garbage',
+    Buffer.from('{"t":"yesterday","i":"x"}').toString('base64url'),
+    Buffer.from('[]').toString('base64url'),
+  ])('rejects the malformed cursor %j as a validation error', (raw) => {
+    expect(() => decodeCursor(raw)).toThrow(
+      expect.objectContaining({ status: 400, code: 'VALIDATION_ERROR' }),
+    );
+  });
+});
