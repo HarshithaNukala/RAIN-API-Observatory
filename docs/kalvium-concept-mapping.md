@@ -69,7 +69,7 @@ This document maps all **17 mandatory assessment concepts** to their exact imple
 
 - **File paths:** `.github/workflows/ci.yml`, `docs/kalvium-concept-mapping.md`
 - **Relevant configuration:** CI workflow (`verify` + `integration` jobs)
-- **Implementation:** Work is preserved cleanly on the existing `master` branch without rewriting history. Notably, `.github/workflows/ci.yml` triggers `on: push: branches: [main]` and `on: pull_request:`; since this repository's local branch is `master`, opening a PR against `main` (or updating the workflow trigger to include `master`) triggers GitHub Actions CI (`typecheck`, `lint`, `format:check`, `test`, `build`, `test:integration`).
+- **Implementation:** Work is preserved cleanly on the `feat/kalvium-ai-incident-analysis` branch without rewriting history. `.github/workflows/ci.yml` triggers `on: push: branches: [master, main]` and `on: pull_request:` so both the `verify` (`typecheck`, `lint`, `format:check`, `test`, `build`) and `integration` (`test:integration` with Postgres Testcontainers and MongoDB service) jobs run on PRs and direct pushes to either default branch.
 - **Recommended practical workflow:**
   1. Branch from `main`/`master`: `git checkout -b feat/incident-ai-analysis`
   2. Keep changes atomic and run local checks (`npm run typecheck && npm run lint && npm run format:check && npm test && npm run build`)

@@ -5,6 +5,7 @@ import {
   IncidentEventListResponseSchema,
   IncidentListResponseSchema,
   IncidentSchema,
+  MONITOR_LIMITS,
   MonitorResponseSchema,
   dataEnvelope,
 } from '@rain/shared';
@@ -18,6 +19,7 @@ import {
   monitors,
 } from '../../apps/server/src/db/schema.js';
 import type { CheckExecution } from '../../apps/server/src/monitoring/executor.js';
+import { classifyCheck } from '../../apps/server/src/monitoring/health.js';
 import {
   createMonitoringStore,
   type MonitoringStore,
@@ -65,9 +67,15 @@ const failure = (): CheckExecution => ({
   errorMessage: 'GET https://api.example.com/health: expected status 200, received 503',
   response: null,
 });
-const success = (latencyMs = 50): CheckExecution => ({
+const success = (
+  latencyMs = 50,
+  latencyThresholdMs = MONITOR_LIMITS.latencyThresholdMs.default,
+): CheckExecution => ({
   checkedAt: new Date(),
-  result: { outcome: 'SUCCESS', statusCode: 200, latencyMs, failureReason: null },
+  result: classifyCheck(
+    { kind: 'response', statusCode: 200, latencyMs },
+    { expectedStatusCode: 200, latencyThresholdMs },
+  ),
   errorMessage: null,
   response: null,
 });
