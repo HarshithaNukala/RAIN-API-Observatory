@@ -9,12 +9,13 @@ SSRF-safe transport), automatic incidents, analytics, email/webhook notification
 
 ## Stack
 
-| Area     | Choice                                                                               |
+| Layer    | Technologies                                                                         |
 | -------- | ------------------------------------------------------------------------------------ |
 | Runtime  | Node.js 26 (`.nvmrc`), npm workspaces                                                |
 | Web      | React 19, Vite, React Router, TanStack Query, Tailwind CSS 4, shadcn/ui, Supabase JS |
 | API      | Express 5, Zod, jose (Supabase JWT verification), Helmet, express-rate-limit, Pino   |
-| Database | Supabase Postgres, Drizzle ORM, drizzle-kit                                          |
+| Database | Supabase Postgres, Drizzle ORM, drizzle-kit; MongoDB + Mongoose (AI analyses)        |
+| AI       | Google Gemini REST API (`generateContent` with structured JSON schema, server-only)  |
 | Tests    | Vitest, Supertest, Testcontainers                                                    |
 
 ## Layout
@@ -96,17 +97,18 @@ All responses are JSON. Success bodies under `/api` are `{ "data": ... }`; every
 `{ "error": { "code", "message", "requestId", "details?" } }` (see `packages/shared/src/errors.ts`).
 Every response carries an `X-Request-Id` header.
 
-| Endpoint                                                       | Auth   | Purpose                                                                                              |
-| -------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
-| `GET /healthz`                                                 | none   | Process liveness                                                                                     |
-| `GET /readyz`                                                  | none   | Database reachable and configuration loaded; `503` when not ready                                    |
-| `GET /api/v1/me`                                               | Bearer | The signed-in user and their profile (created on first call)                                         |
-| `/api/v1/monitors…`                                            | Bearer | Monitor CRUD, headers, pause/resume: see [docs/monitor-management.md](docs/monitor-management.md)    |
-| `/api/v1/incidents…`                                           | Bearer | Incidents, timeline, acknowledgement: see [docs/incident-management.md](docs/incident-management.md) |
-| `/api/v1/analytics…`, `/api/v1/monitors/:id/metrics`           | Bearer | Analytics: see [docs/metrics-and-analytics.md](docs/metrics-and-analytics.md)                        |
-| `/api/v1/notifications…`, `/api/v1/monitors/:id/notifications` | Bearer | Notification settings and delivery history: see [docs/notifications.md](docs/notifications.md)       |
-| `/api/v1/status-pages…`                                        | Bearer | Status page management: see [docs/public-status-pages.md](docs/public-status-pages.md)               |
-| `GET /api/v1/public/status-pages/:slug`                        | none   | Published status page (rate-limited, never cached)                                                   |
+| Endpoint                                                       | Auth   | Purpose                                                                                                              |
+| -------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `GET /healthz`                                                 | none   | Process liveness                                                                                                     |
+| `GET /readyz`                                                  | none   | Database reachable and configuration loaded; `503` when not ready                                                    |
+| `GET /api/v1/me`                                               | Bearer | The signed-in user and their profile (created on first call)                                                         |
+| `/api/v1/monitors…`                                            | Bearer | Monitor CRUD, headers, pause/resume: see [docs/monitor-management.md](docs/monitor-management.md)                    |
+| `/api/v1/incidents…`                                           | Bearer | Incidents, timeline, acknowledgement: see [docs/incident-management.md](docs/incident-management.md)                 |
+| `/api/v1/incidents/:id/ai-analyses…`                           | Bearer | AI incident analysis (Gemini + MongoDB CRUD): see [docs/kalvium-concept-mapping.md](docs/kalvium-concept-mapping.md) |
+| `/api/v1/analytics…`, `/api/v1/monitors/:id/metrics`           | Bearer | Analytics: see [docs/metrics-and-analytics.md](docs/metrics-and-analytics.md)                                        |
+| `/api/v1/notifications…`, `/api/v1/monitors/:id/notifications` | Bearer | Notification settings and delivery history: see [docs/notifications.md](docs/notifications.md)                       |
+| `/api/v1/status-pages…`                                        | Bearer | Status page management: see [docs/public-status-pages.md](docs/public-status-pages.md)                               |
+| `GET /api/v1/public/status-pages/:slug`                        | none   | Published status page (rate-limited, never cached)                                                                   |
 
 `/api` routes return `401` for a missing, malformed, invalid or expired token (`TOKEN_EXPIRED`).
 Requests are rate-limited per client IP (120/min) and bodies are capped at 256 kB.
@@ -149,6 +151,7 @@ values unreadable.
 - [Product requirements (PRD)](docs/PRD.md)
 - [High-level design (HLD)](docs/HLD.md)
 - [Low-level design (LLD)](docs/LLD.md)
+- [Kalvium 17-concept mapping](docs/kalvium-concept-mapping.md)
 - [Supabase setup](docs/supabase-setup.md)
 - [Testing](docs/testing.md)
 - [Deployment](docs/deployment.md)

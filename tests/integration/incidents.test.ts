@@ -22,6 +22,7 @@ import {
   createMonitoringStore,
   type MonitoringStore,
 } from '../../apps/server/src/monitoring/monitoring-store.js';
+import { createIncidentRepository } from '../../apps/server/src/incidents/incident-repository.js';
 import { createHarness, sqlState, type Harness, type TestUser } from './harness.js';
 
 // Incident management on real PostgreSQL (migration 0005): constraints, the append-only timeline,
@@ -404,5 +405,21 @@ describe('incident API', () => {
       const res = await alice.get(`/api/v1/incidents/${id}`).expect(404);
       expect(ApiErrorSchema.parse(res.body).error.code).toBe('INCIDENT_NOT_FOUND');
     }
+  });
+
+  it('findAnalysisContext joins incidents, monitors and monitor_checks scoped to owner', async () => {
+    const { monitor, incidentId } = await openIncident(alice);
+    const repo = createIncidentRepository(h.db);
+
+    const ctx = await repo.findAnalysisContext(alice.id, incidentId);
+    expect(ctx).toBeDefined();
+    expect(ctx!.incident.id).toBe(incidentId);
+    expect(ctx!.monitor.id).toBe(monitor.id);
+    expect(ctx!.triggerCheck?.statusCode).toBe(503);
+    expect(ctx!.recentChecks.length).toBeGreaterThanOrEqual(2);
+    expect(ctx!.windowStats.failedChecks).toBeGreaterThanOrEqual(2);
+
+    // Owner isolation: Bob cannot read Alice's context.
+    expect(await repo.findAnalysisContext(bob.id, incidentId)).toBeUndefined();
   });
 });

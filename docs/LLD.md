@@ -24,8 +24,10 @@ apps/
       monitors/              routes, service, repository, cursor pagination, secret contexts
       monitoring/            executor, safe-transport, health, incident-rules, completion,
                              schedule, monitoring-store (PostgreSQL), worker-engine
-      incidents/             routes, service, repository
+      incidents/             routes, service, repository (incl. multi-table SQL JOIN context)
+      ai/                    Gemini adapter, prompt builder, Mongoose model, CRUD repository, routes
       analytics/             routes, service, repository, analytics-window
+      examples/              isolated educational JS fundamentals (hoisting, promises vs callbacks)
       notifications/         routes, service, repository, outbox, rules, dispatcher,
                              dispatch-store, email (Resend), webhook-sender
       status-pages/          routes (private + public), service, repository, public-status
@@ -210,14 +212,22 @@ errors as `{ "error": { "code", "message", "details"? } }` with an `X-Request-Id
 
 ### 4.4 Incidents
 
-| Method | Path                                 | Description                                                    |
-| ------ | ------------------------------------ | -------------------------------------------------------------- |
-| GET    | `/incidents`                         | List: `status` (incl. ACTIVE), `severity`, `monitorId`, cursor |
-| GET    | `/incidents/counts`                  | Totals by status (optionally per monitor)                      |
-| GET    | `/incidents/:incidentId`             | Detail                                                         |
-| GET    | `/incidents/:incidentId/events`      | Timeline                                                       |
-| POST   | `/incidents/:incidentId/acknowledge` | Acknowledge                                                    |
-| PATCH  | `/incidents/:incidentId`             | Edit title, description, severity                              |
+| Method | Path                                             | Description                                                    |
+| ------ | ------------------------------------------------ | -------------------------------------------------------------- |
+| GET    | `/incidents`                                     | List: `status` (incl. ACTIVE), `severity`, `monitorId`, cursor |
+| GET    | `/incidents/counts`                              | Totals by status (optionally per monitor)                      |
+| GET    | `/incidents/:incidentId`                         | Detail                                                         |
+| GET    | `/incidents/:incidentId/events`                  | Timeline                                                       |
+| POST   | `/incidents/:incidentId/acknowledge`             | Acknowledge                                                    |
+| PATCH  | `/incidents/:incidentId`                         | Edit title, description, severity                              |
+| GET    | `/incidents/:incidentId/ai-analyses`             | List MongoDB AI analyses & server capability                   |
+| POST   | `/incidents/:incidentId/ai-analyses`             | Generate Gemini analysis & store in MongoDB (rate-limited)     |
+| PATCH  | `/incidents/:incidentId/ai-analyses/:analysisId` | Update operator notes or helpfulness feedback                  |
+| DELETE | `/incidents/:incidentId/ai-analyses/:analysisId` | Delete an AI analysis document from MongoDB                    |
+| GET    | `/incidents/:incidentId/ai-analyses`             | List MongoDB AI analyses & server capability                   |
+| POST   | `/incidents/:incidentId/ai-analyses`             | Generate Gemini analysis & store in MongoDB (rate-limited)     |
+| PATCH  | `/incidents/:incidentId/ai-analyses/:analysisId` | Update operator notes or helpfulness feedback                  |
+| DELETE | `/incidents/:incidentId/ai-analyses/:analysisId` | Delete an AI analysis document from MongoDB                    |
 
 ### 4.5 Analytics
 

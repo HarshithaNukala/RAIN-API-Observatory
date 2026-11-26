@@ -49,6 +49,17 @@ const emailEnv = {
     .optional(),
 };
 
+/** Optional AI incident analysis dependencies: RAIN remains functional when omitted. */
+const aiEnv = {
+  GEMINI_API_KEY: z.string().min(10, 'looks too short for a Gemini API key').optional(),
+  GEMINI_MODEL: z.string().trim().min(1).max(100).default('gemini-2.5-flash'),
+  MONGODB_URI: z
+    .string()
+    .regex(/^mongodb(\+srv)?:\/\//, 'must be a mongodb:// or mongodb+srv:// connection URI')
+    .optional(),
+  MONGODB_DB_NAME: z.string().trim().min(1).max(64).default('rain_ai'),
+};
+
 function emailConfig(parsed: {
   RESEND_API_KEY?: string | undefined;
   NOTIFICATION_EMAIL_FROM?: string | undefined;
@@ -109,6 +120,7 @@ const serverEnv = commonEnv.extend({
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
   ...encryptionEnv,
   ...emailEnv,
+  ...aiEnv,
   MAX_MONITORS_PER_USER: z.coerce.number().int().min(1).max(1000).default(25),
 });
 
@@ -144,6 +156,11 @@ export interface EncryptionConfig {
   keys: Map<number, Buffer>;
 }
 
+export interface AiConfig {
+  gemini: { apiKey: string; model: string } | null;
+  mongodb: { uri: string; dbName: string } | null;
+}
+
 export interface ServerConfig extends BaseConfig {
   port: number;
   auth: AuthConfig;
@@ -153,6 +170,7 @@ export interface ServerConfig extends BaseConfig {
   maxMonitorsPerUser: number;
   /** Whether the worker can send email (shown on the settings page; the key stays server-side). */
   emailConfigured: boolean;
+  ai: AiConfig;
 }
 
 type Env = Record<string, string | undefined>;
@@ -280,5 +298,13 @@ export function loadServerConfig(env: Env): ServerConfig {
     ),
     maxMonitorsPerUser: parsed.MAX_MONITORS_PER_USER,
     emailConfigured: emailConfig(parsed).resend !== null,
+    ai: {
+      gemini: parsed.GEMINI_API_KEY
+        ? { apiKey: parsed.GEMINI_API_KEY, model: parsed.GEMINI_MODEL }
+        : null,
+      mongodb: parsed.MONGODB_URI
+        ? { uri: parsed.MONGODB_URI, dbName: parsed.MONGODB_DB_NAME }
+        : null,
+    },
   };
 }

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { MonitorStatus } from '@rain/shared';
 import type { IncidentRow } from '../db/schema.js';
 import type {
+  IncidentAnalysisContext,
+  IncidentCheckSummary,
   IncidentFilters,
   IncidentRepository,
   IncidentWithMonitor,
@@ -115,6 +117,62 @@ export function createInMemoryIncidentRepository(
         )
         .slice(0, limit)
         .map((e) => ({ ...e }));
+    },
+
+    async findAnalysisContext(ownerId, incidentId): Promise<IncidentAnalysisContext | undefined> {
+      const i = owned(ownerId, incidentId);
+      if (!i) return undefined;
+      const m = repo.monitors.find((x) => x.id === i.monitorId && x.ownerId === ownerId);
+      if (!m) return undefined;
+      const toSummary = (c: (typeof repo.checks)[number]): IncidentCheckSummary => ({
+        id: c.id,
+        checkedAt: c.checkedAt,
+        source: c.source,
+        outcome: c.outcome,
+        statusCode: c.statusCode,
+        latencyMs: c.latencyMs,
+        failureReason: c.failureReason,
+        errorMessage: c.errorMessage,
+      });
+      const monitorChecksList = repo.checks
+        .filter((c) => c.monitorId === m.id)
+        .sort((a, b) => b.checkedAt.getTime() - a.checkedAt.getTime());
+      const cutoff = i.startedAt.getTime() - 24 * 60 * 60 * 1000;
+      const windowChecks = monitorChecksList.filter((c) => c.checkedAt.getTime() >= cutoff);
+      const latencies = windowChecks.map((c) => c.latencyMs).filter((v): v is number => v !== null);
+      return {
+        incident: { ...i },
+        monitor: {
+          id: m.id,
+          name: m.name,
+          url: m.url,
+          method: m.method,
+          expectedStatusCode: m.expectedStatusCode,
+          timeoutMs: m.timeoutMs,
+          latencyThresholdMs: m.latencyThresholdMs,
+          checkIntervalSeconds: m.checkIntervalSeconds,
+          enabled: m.enabled,
+          currentStatus: m.currentStatus as MonitorStatus,
+          consecutiveFailures: m.consecutiveFailures,
+          consecutiveSuccesses: m.consecutiveSuccesses,
+        },
+        triggerCheck: i.triggerCheckId
+          ? (monitorChecksList.find((c) => c.id === i.triggerCheckId) ?? null) &&
+            toSummary(monitorChecksList.find((c) => c.id === i.triggerCheckId)!)
+          : null,
+        resolvedByCheck: i.resolvedByCheckId
+          ? (monitorChecksList.find((c) => c.id === i.resolvedByCheckId) ?? null) &&
+            toSummary(monitorChecksList.find((c) => c.id === i.resolvedByCheckId)!)
+          : null,
+        recentChecks: monitorChecksList.slice(0, 15).map(toSummary),
+        windowStats: {
+          totalChecks: windowChecks.length,
+          failedChecks: windowChecks.filter((c) => c.outcome === 'FAILURE').length,
+          avgLatencyMs: latencies.length
+            ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+            : null,
+        },
+      };
     },
 
     // Delegates to the monitor repository's transaction, which snapshots incidents and events.
