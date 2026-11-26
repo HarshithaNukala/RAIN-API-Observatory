@@ -24,6 +24,7 @@ import { MonitorStateBadges } from '@/features/monitors/status-badge';
 import { useAcknowledgeIncident, useIncident, useIncidentEvents, useUpdateIncident } from './api';
 import { IncidentStatusBadge, SeverityBadge } from './badges';
 import { EVENT_LABELS, SEVERITY_LABELS, formatDuration } from './format';
+import { IncidentAiPanel } from './incident-ai-panel';
 
 const incidentsCrumb = { label: 'Incidents', to: '/app/incidents' };
 
@@ -341,6 +342,8 @@ export function IncidentDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <IncidentAiPanel incidentId={incident.id} />
 
       <Timeline incidentId={incident.id} />
     </div>

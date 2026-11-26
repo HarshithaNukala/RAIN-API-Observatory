@@ -47,6 +47,10 @@ flowchart LR
   W -- SSRF-safe HTTP(S) --> T
   W -- HTTPS --> R
   W -- SSRF-safe, signed --> H
+  MDB[(MongoDB<br/>AI analyses)]
+  GEM[Google Gemini API]
+  API <--> MDB
+  API -- HTTPS (server-only key) --> GEM
 ```
 
 ### 1.2 Rationale
@@ -86,7 +90,8 @@ flowchart LR
 | Monitors          | `apps/server/src/monitors`                     | CRUD, URL safety, encryption of secrets, pause/resume, Check Now, history  |
 | Monitoring engine | `apps/server/src/monitoring`                   | Claiming, executing, classifying, health state, incident rules, scheduling |
 | Safe transport    | `apps/server/src/monitoring/safe-transport.ts` | DNS validation, address pinning, TLS, redirect refusal                     |
-| Incidents         | `apps/server/src/incidents`                    | Listing, counts, detail, timeline, acknowledge, edit                       |
+| Incidents         | `apps/server/src/incidents`                    | Listing, counts, detail, timeline, acknowledge, edit, PG JOIN context      |
+| AI analysis       | `apps/server/src/ai`                           | Versioned prompt, Gemini REST adapter, Mongoose CRUD, advisory history     |
 | Analytics         | `apps/server/src/analytics`                    | Windows, SQL aggregates, percentiles, time-series buckets                  |
 | Notifications     | `apps/server/src/notifications`                | Settings, outbox rows, dispatcher, email and webhook senders, retry policy |
 | Status pages      | `apps/server/src/status-pages`                 | Management API, public view generation, public rate-limited router         |

@@ -6,9 +6,13 @@
  * Nothing in the production app imports this module.
  */
 import {
+  AI_ANALYSIS_PROMPT_VERSION,
   AddStatusPageMonitorSchema,
+  AiAnalysisListQuerySchema,
   CreateStatusPageSchema,
+  GenerateAiAnalysisSchema,
   ReorderStatusPageMonitorsSchema,
+  UpdateAiAnalysisSchema,
   UpdateStatusPageMonitorSchema,
   UpdateStatusPageSchema,
   CreateMonitorSchema,
@@ -25,6 +29,8 @@ import {
   findMonitorConfigIssues,
   monitorOrigin,
   resolveBodyContentType,
+  type AiAnalysisDocument,
+  type AiCapability,
   type AnalyticsOverview,
   type AnalyticsRange,
   type ApiFieldIssue,
@@ -109,6 +115,10 @@ export interface FakeMonitorApi {
   incidentEvents: Map<string, IncidentEvent[]>;
   /** Adds an incident for a seeded monitor, with an INCIDENT_CREATED event. */
   seedIncident(monitorId: string, overrides?: Partial<Incident>): Incident;
+  /** AI incident analysis documents by incident ID and capability state. */
+  aiAnalyses: Map<string, AiAnalysisDocument[]>;
+  aiCapability: AiCapability;
+  seedAiAnalysis(incidentId: string, overrides?: Partial<AiAnalysisDocument>): AiAnalysisDocument;
   /**
    * Analytics responses by range (and by monitor). Unset ranges answer "nothing recorded",
    * with monitor counts taken from the seeded monitors.
@@ -295,11 +305,61 @@ export function createFakeMonitorApi(options: { quotaLimit?: number } = {}): Fak
         },
       });
     }
-    const match = /^\/api\/v1\/incidents\/([^/]+)(\/events|\/acknowledge)?$/.exec(path);
+    const match =
+      /^\/api\/v1\/incidents\/([^/]+)(\/events|\/acknowledge|\/ai-analyses(?:\/([^/]+))?)?$/.exec(
+        path,
+      );
     if (!match) return undefined;
     const incident = fake.incidents.find((i) => i.id === decodeURIComponent(match[1]!));
     if (!incident) return error(404, 'INCIDENT_NOT_FOUND', 'Incident not found');
     const action = match[2];
+    const analysisId = match[3] ? decodeURIComponent(match[3]) : undefined;
+    if (action?.startsWith('/ai-analyses')) {
+      const list = fake.aiAnalyses.get(incident.id) ?? [];
+      if (!analysisId && method === 'GET') {
+        const query = AiAnalysisListQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+        if (!query.success) return validationError(query.error);
+        return json(200, {
+          data: {
+            items: fake.aiCapability.mongodbConfigured ? list.slice(0, query.data.limit) : [],
+            capability: fake.aiCapability,
+          },
+        });
+      }
+      if (!analysisId && method === 'POST') {
+        if (!fake.aiCapability.available) {
+          return error(
+            503,
+            'AI_NOT_CONFIGURED',
+            fake.aiCapability.reason ?? 'AI incident analysis is not configured.',
+          );
+        }
+        const parsed = GenerateAiAnalysisSchema.safeParse(body ?? {});
+        if (!parsed.success) return validationError(parsed.error);
+        const created = seedAiAnalysis(incident.id, {
+          focusQuestion: parsed.data.focusQuestion ?? null,
+        });
+        return json(201, { data: created });
+      }
+      if (analysisId && method === 'PATCH') {
+        const parsed = UpdateAiAnalysisSchema.safeParse(body);
+        if (!parsed.success) return validationError(parsed.error);
+        const target = list.find((a) => a.id === analysisId);
+        if (!target) return error(404, 'AI_ANALYSIS_NOT_FOUND', 'AI analysis not found');
+        if (parsed.data.operatorNotes !== undefined) {
+          target.operatorNotes = parsed.data.operatorNotes;
+        }
+        if (parsed.data.helpful !== undefined) target.helpful = parsed.data.helpful;
+        target.updatedAt = tick();
+        return json(200, { data: { ...target } });
+      }
+      if (analysisId && method === 'DELETE') {
+        const idx = list.findIndex((a) => a.id === analysisId);
+        if (idx === -1) return error(404, 'AI_ANALYSIS_NOT_FOUND', 'AI analysis not found');
+        list.splice(idx, 1);
+        return new Response(null, { status: 204 });
+      }
+    }
     if (!action && method === 'GET') return json(200, { data: incidentView(incident) });
     if (action === '/events' && method === 'GET') {
       const query = IncidentEventListQuerySchema.safeParse(Object.fromEntries(url.searchParams));
@@ -1003,6 +1063,54 @@ export function createFakeMonitorApi(options: { quotaLimit?: number } = {}): Fak
     return row;
   }
 
+  function seedAiAnalysis(
+    incidentId: string,
+    overrides: Partial<AiAnalysisDocument> = {},
+  ): AiAnalysisDocument {
+    const incident = fake.incidents.find((i) => i.id === incidentId);
+    if (!incident) throw new Error(`No incident ${incidentId}`);
+    const at = tick();
+    const id = String(++sequence).padStart(24, 'a');
+    const doc: AiAnalysisDocument = {
+      id,
+      incidentId: incident.id,
+      monitorId: incident.monitor.id,
+      promptVersion: AI_ANALYSIS_PROMPT_VERSION,
+      model: 'gemini-2.5-flash',
+      focusQuestion: null,
+      analysis: {
+        incidentSummary: `${incident.monitor.name} recorded consecutive check failures triggering ${incident.severity} incident.`,
+        potentialCauses: [
+          'Upstream service or dependency returned unexpected responses or timed out.',
+        ],
+        supportingEvidence: [
+          `Incident status is ${incident.status} with severity ${incident.severity}.`,
+        ],
+        suggestedInvestigationSteps: [
+          'Inspect recent failed check error messages and HTTP status codes in RAIN.',
+        ],
+        recommendedActions: ['Verify target service availability before acknowledging.'],
+        confidenceLevel: 'MEDIUM',
+        limitations: ['RAIN observes black-box HTTP probes without target server logs.'],
+      },
+      operatorNotes: null,
+      helpful: null,
+      contextSnapshot: {
+        monitorName: incident.monitor.name,
+        incidentStatus: incident.status,
+        incidentSeverity: incident.severity,
+        checksAnalyzed: 2,
+        failedChecksInWindow: 2,
+        avgLatencyMs: 120,
+      },
+      createdAt: at,
+      updatedAt: at,
+      ...overrides,
+    };
+    fake.aiAnalyses.set(incidentId, [doc, ...(fake.aiAnalyses.get(incidentId) ?? [])]);
+    return doc;
+  }
+
   const fake: FakeMonitorApi = {
     statusPages: [],
     seedStatusPage,
@@ -1015,6 +1123,14 @@ export function createFakeMonitorApi(options: { quotaLimit?: number } = {}): Fak
     incidents: [],
     incidentEvents: new Map(),
     seedIncident,
+    aiAnalyses: new Map(),
+    aiCapability: {
+      available: true,
+      geminiConfigured: true,
+      mongodbConfigured: true,
+      reason: null,
+    },
+    seedAiAnalysis,
     monitors,
     checks,
     recordCheck,

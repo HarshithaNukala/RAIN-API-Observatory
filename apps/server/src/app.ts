@@ -20,6 +20,8 @@ import { notificationRouter } from './notifications/notification-routes.js';
 import type { NotificationService } from './notifications/notification-service.js';
 import { incidentRouter } from './incidents/incident-routes.js';
 import type { IncidentService } from './incidents/incident-service.js';
+import { aiAnalysisRouter, type AiAnalysisRateLimits } from './ai/ai-analysis-routes.js';
+import type { AiAnalysisService } from './ai/ai-analysis-service.js';
 import { healthRouter, type ReadinessProbe } from './routes/health.js';
 import { meRouter } from './routes/me.js';
 
@@ -31,6 +33,8 @@ export interface AppDependencies {
   profiles: ProfileStore;
   monitors: MonitorService;
   incidents: IncidentService;
+  aiAnalyses?: AiAnalysisService;
+  aiRateLimits?: AiAnalysisRateLimits;
   analytics: AnalyticsService;
   notifications: NotificationService;
   statusPages: StatusPageService;
@@ -106,6 +110,9 @@ export function createApp(deps: AppDependencies): Express {
     monitorRouter(deps.monitors, { manualCheckRateLimits: deps.manualCheckRateLimits }),
   );
   api.use('/v1', incidentRouter(deps.incidents));
+  if (deps.aiAnalyses) {
+    api.use('/v1', aiAnalysisRouter(deps.aiAnalyses, { rateLimits: deps.aiRateLimits }));
+  }
   api.use('/v1', analyticsRouter(deps.analytics));
   api.use('/v1', notificationRouter(deps.notifications));
   api.use('/v1', statusPageRouter(deps.statusPages));

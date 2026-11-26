@@ -250,3 +250,77 @@ describe('monitor details integration', () => {
     expect(await screen.findByText('No incidents for this monitor.')).toBeInTheDocument();
   });
 });
+
+describe('incident AI analysis UI', () => {
+  it('generates, edits notes, toggles helpfulness, shows history, and deletes an analysis', async () => {
+    const { fake, open } = seedThree();
+    fake.seedAiAnalysis(open.id, {
+      analysis: {
+        incidentSummary: 'Earlier outage hypothesis.',
+        potentialCauses: ['Earlier cause.'],
+        supportingEvidence: ['Earlier evidence.'],
+        suggestedInvestigationSteps: ['Check earlier logs.'],
+        recommendedActions: ['Earlier action.'],
+        confidenceLevel: 'LOW',
+        limitations: ['Sparse data.'],
+      },
+    });
+    const { user } = renderApp(`/app/incidents/${open.id}`, fake);
+
+    expect(await screen.findByText('Earlier outage hypothesis.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add focus' }));
+    await user.type(screen.getByLabelText('Optional focus question'), 'Did 503s spike?');
+    await user.click(screen.getByRole('button', { name: 'Generate AI Analysis' }));
+
+    expect(
+      await screen.findByText(/Payments recorded consecutive check failures/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Did 503s spike\?/)).toBeInTheDocument();
+
+    // Expand previous history.
+    await user.click(screen.getByRole('button', { name: /Show previous analyses \(1\)/ }));
+    expect(screen.getByText('Earlier outage hypothesis.')).toBeInTheDocument();
+
+    // Mark latest helpful and add operator notes.
+    await user.click(screen.getAllByRole('button', { name: 'Mark analysis helpful' })[0]!);
+    await user.click(screen.getAllByRole('button', { name: 'Edit analysis notes' })[0]!);
+    await user.type(screen.getByLabelText('Operator notes'), 'Confirmed upstream outage');
+    await user.click(screen.getByRole('button', { name: 'Save notes' }));
+    expect(await screen.findByText('Confirmed upstream outage')).toBeInTheDocument();
+
+    // Delete the latest analysis via confirmation dialog.
+    await user.click(screen.getAllByRole('button', { name: 'Delete analysis' })[0]!);
+    await user.click(screen.getByRole('button', { name: 'Delete analysis' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Confirmed upstream outage')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('shows a calm unavailable state when Gemini or MongoDB is not configured', async () => {
+    const { fake, open } = seedThree();
+    fake.aiCapability = {
+      available: false,
+      geminiConfigured: false,
+      mongodbConfigured: false,
+      reason: 'Configure GEMINI_API_KEY and MONGODB_URI on the server.',
+    };
+    renderApp(`/app/incidents/${open.id}`, fake);
+
+    expect(await screen.findByText('AI analysis unavailable')).toBeInTheDocument();
+    expect(
+      screen.getByText('Configure GEMINI_API_KEY and MONGODB_URI on the server.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate AI Analysis' })).not.toBeInTheDocument();
+  });
+
+  it('shows an error state with retry when loading analyses fails', async () => {
+    const { fake, open } = seedThree();
+    fake.failNext('GET', /\/ai-analyses$/, 'network-error');
+    const { user } = renderApp(`/app/incidents/${open.id}`, fake);
+
+    expect(await screen.findByText("Couldn't load AI analyses")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Generate AI Analysis' })).toBeInTheDocument();
+  });
+});

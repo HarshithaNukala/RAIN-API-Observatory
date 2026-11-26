@@ -17,6 +17,10 @@ import { createStatusPageRepository } from './status-pages/status-page-repositor
 import { createStatusPageService } from './status-pages/status-page-service.js';
 import { createIncidentRepository } from './incidents/incident-repository.js';
 import { createIncidentService } from './incidents/incident-service.js';
+import { connectAiMongo, createAiAnalysisRepository } from './ai/ai-analysis-repository.js';
+import { createAiAnalysisService } from './ai/ai-analysis-service.js';
+import { createGeminiClient } from './ai/gemini-client.js';
+import { safeError } from './safe-error.js';
 
 loadDotEnv();
 
@@ -45,6 +49,21 @@ const jwks = createRemoteJWKSet(new URL(config.auth.jwksUrl), {
 
 const profiles = createProfileStore(database.db);
 const secretBox = createSecretBox(config.encryption);
+const incidentRepository = createIncidentRepository(database.db);
+
+const mongo = config.ai.mongodb
+  ? await connectAiMongo(config.ai.mongodb.uri, config.ai.mongodb.dbName).catch((err: unknown) => {
+      logger.warn(
+        { error: safeError(err) },
+        'mongodb unavailable; AI incident analysis storage disabled',
+      );
+      return null;
+    })
+  : null;
+
+const geminiClient = config.ai.gemini
+  ? createGeminiClient({ apiKey: config.ai.gemini.apiKey, model: config.ai.gemini.model })
+  : null;
 
 const app = createApp({
   logger,
@@ -63,7 +82,12 @@ const app = createApp({
     secretBox,
     maxMonitorsPerUser: config.maxMonitorsPerUser,
   }),
-  incidents: createIncidentService({ repository: createIncidentRepository(database.db) }),
+  incidents: createIncidentService({ repository: incidentRepository }),
+  aiAnalyses: createAiAnalysisService({
+    incidentRepository,
+    aiRepository: mongo ? createAiAnalysisRepository(mongo.connection) : null,
+    geminiClient,
+  }),
   analytics: createAnalyticsService({ repository: createAnalyticsRepository(database.db) }),
   statusPages: createStatusPageService({
     repository: createStatusPageRepository(database.db),
@@ -113,7 +137,7 @@ function shutdown(signal: NodeJS.Signals): void {
   }, 10_000);
   force.unref();
   server.close(() => {
-    void database.close().finally(() => {
+    void Promise.allSettled([database.close(), mongo?.close() ?? Promise.resolve()]).finally(() => {
       logger.info('api stopped');
       clearTimeout(force);
     });

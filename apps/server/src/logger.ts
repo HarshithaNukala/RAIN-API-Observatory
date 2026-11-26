@@ -5,6 +5,7 @@ export const REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
   'req.headers["x-api-key"]',
+  'req.headers["x-goog-api-key"]',
   'res.headers["set-cookie"]',
   '*.password',
   '*.token',
@@ -18,6 +19,10 @@ export const REDACT_PATHS = [
   '*.SUPABASE_JWT_SECRET',
   '*.apiKey',
   '*.RESEND_API_KEY',
+  '*.GEMINI_API_KEY',
+  '*.geminiApiKey',
+  '*.MONGODB_URI',
+  '*.mongodbUri',
   '*.ENCRYPTION_KEY',
   '*.signingSecret',
 ];

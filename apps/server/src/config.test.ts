@@ -111,6 +111,39 @@ describe('loadServerConfig', () => {
       loadServerConfig({ ...validEnv, SUPABASE_URL: 'http://127.0.0.1:54321' }).auth.issuer,
     ).toBe('http://127.0.0.1:54321/auth/v1');
   });
+
+  it('loads optional Gemini and MongoDB settings and never echoes secrets on error', () => {
+    expect(loadServerConfig(validEnv).ai).toEqual({ gemini: null, mongodb: null });
+
+    const configured = loadServerConfig({
+      ...validEnv,
+      GEMINI_API_KEY: 'AIzaSyValidTestKey123',
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      MONGODB_URI: 'mongodb://localhost:27017/rain_ai',
+      MONGODB_DB_NAME: 'rain_ai_dev',
+    });
+    expect(configured.ai).toEqual({
+      gemini: { apiKey: 'AIzaSyValidTestKey123', model: 'gemini-2.5-flash' },
+      mongodb: { uri: 'mongodb://localhost:27017/rain_ai', dbName: 'rain_ai_dev' },
+    });
+
+    const bad = (() => {
+      try {
+        loadServerConfig({
+          ...validEnv,
+          GEMINI_API_KEY: 'tiny-key',
+          MONGODB_URI: 'http://not-mongo',
+        });
+      } catch (e) {
+        return e as Error;
+      }
+      throw new Error('expected failure');
+    })();
+    expect(bad.message).toContain('GEMINI_API_KEY');
+    expect(bad.message).toContain('MONGODB_URI');
+    expect(bad.message).not.toContain('tiny-key');
+    expect(bad.message).not.toContain('http://not-mongo');
+  });
 });
 
 describe('loadServerConfig encryption and limits', () => {

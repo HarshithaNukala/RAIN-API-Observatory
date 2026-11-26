@@ -42,7 +42,7 @@ beforeEach(async () => {
 
 async function createMonitor(user: TestUser = alice, name = 'internal-payments') {
   const res = await user
-    .post('/api/v1/monitors', { name, url: 'https://api.example.com/health?key=s3cr3t' })
+    .post('/api/v1/monitors', { name, url: 'https://api.example.com/health' })
     .expect(201);
   return dataEnvelope(MonitorResponseSchema).parse(res.body).data;
 }
